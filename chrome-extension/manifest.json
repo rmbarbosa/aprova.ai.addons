@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Aprova.ai Extension",
+  "version": "1.0.0",
+  "description": "Preenchimento inteligente de formulários de candidatura — powered by Claude",
+  "author": "Rui Barbosa @rmblda 2026",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://localhost:9090/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://balcao.portugal2030.pt/*",
+        "https://balcao2030.gov.pt/*",
+        "https://balcao.fundoseuropeus.pt/*",
+        "https://*.iapmei.pt/*",
+        "https://*.compete2020.gov.pt/*"
+      ],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

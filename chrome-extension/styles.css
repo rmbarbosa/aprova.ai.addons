@@ -1,0 +1,132 @@
+/* Aprova.ai Extension — Content Script Styles */
+
+/* Page badge — small indicator that extension is active */
+.aprova-badge {
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  z-index: 99999;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #1a1a2e;
+  color: #4ade80;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  opacity: 0.7;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.aprova-badge:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+/* Confirm overlay — shown in confirm mode before each action */
+.aprova-confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100000;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.aprova-confirm-box {
+  background: #1a1a2e;
+  color: #e2e8f0;
+  border-radius: 12px;
+  padding: 20px 24px;
+  min-width: 320px;
+  max-width: 500px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(74, 222, 128, 0.2);
+}
+
+.aprova-confirm-type {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #4ade80;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.aprova-confirm-desc {
+  font-size: 14px;
+  margin-bottom: 12px;
+  color: #cbd5e1;
+  line-height: 1.4;
+}
+
+.aprova-confirm-value {
+  background: #16213e;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  color: #93c5fd;
+  margin-bottom: 16px;
+  border-left: 3px solid #4ade80;
+  word-break: break-all;
+}
+
+.aprova-confirm-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.aprova-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  font-family: system-ui, sans-serif;
+}
+
+.aprova-btn:active {
+  transform: scale(0.97);
+}
+
+.aprova-btn-yes {
+  background: #4ade80;
+  color: #0a0a1a;
+}
+
+.aprova-btn-yes:hover {
+  background: #22c55e;
+}
+
+.aprova-btn-skip {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.aprova-btn-skip:hover {
+  background: #475569;
+}
+
+.aprova-btn-stop {
+  background: #ef4444;
+  color: white;
+}
+
+.aprova-btn-stop:hover {
+  background: #dc2626;
+}
