@@ -98,6 +98,10 @@ aprova.ai.addons/
 | **Browser State** | Lê `tmp/.browser-state.json` para saber o que está aberto no Chrome |
 | **Stale detection** | Campo `age_seconds` indica frescura do estado (>60s = possivelmente desactualizado) |
 
+## Autenticação
+
+> **Não é necessária API key.** O bridge usa o Claude Code SDK, que por sua vez invoca o CLI `claude` — e o CLI já tem a autenticação feita via `claude login`. Não é preciso configurar `ANTHROPIC_API_KEY` nem qualquer outra variável de ambiente.
+
 ## Setup
 
 ### 1. Bridge Server

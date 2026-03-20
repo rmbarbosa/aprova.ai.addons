@@ -24,10 +24,13 @@ O content script empurra o estado da página (URL, campos, botões) via `POST /b
 **Claude → Extensão (streaming):**
 O endpoint `/ask/stream` envia respostas via Server-Sent Events (SSE), permitindo que o texto apareça progressivamente no side panel. O SDK corre numa thread separada, eventos passam por uma `queue.Queue` para o generator Flask.
 
+## Autenticação
+
+> **O bridge server NÃO precisa de API key.** Usa o Claude Code SDK que invoca o CLI `claude` — a autenticação é a do próprio CLI. Basta ter feito `claude login` uma vez.
+
 ## Requisitos
 
 - Python 3.10+
-- Claude Code CLI instalado (`claude --version`)
 - Claude Code CLI instalado e autenticado (`claude login`)
 
 ## Instalação
