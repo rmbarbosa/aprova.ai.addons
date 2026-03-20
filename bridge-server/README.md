@@ -28,7 +28,7 @@ O endpoint `/ask/stream` envia respostas via Server-Sent Events (SSE), permitind
 
 - Python 3.10+
 - Claude Code CLI instalado (`claude --version`)
-- Conta Anthropic com API key configurada (`ANTHROPIC_API_KEY`)
+- Claude Code CLI instalado e autenticado (`claude login`)
 
 ## Instalação
 
@@ -161,7 +161,7 @@ curl http://localhost:9090/browser/state
 
 - Escuta APENAS em `localhost:9090` (nunca exposto à rede)
 - CORS restrito a `chrome-extension://` e `localhost`
-- Sem credenciais próprias — usa `ANTHROPIC_API_KEY` da env
+- Sem credenciais próprias — usa a autenticação do Claude Code CLI
 - Screenshots temporários apagados após análise
 - Working directory fixo: `C:\trabalhos\aprova.ai`
 

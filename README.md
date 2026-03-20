@@ -108,9 +108,6 @@ cd bridge-server
 # Instalar dependências
 pip install -r requirements.txt
 
-# Configurar API key
-set ANTHROPIC_API_KEY=sk-ant-...
-
 # Iniciar (escolher um modo)
 py -3 aprova_ai_bridge.py              # com system tray icon
 py -3 aprova_ai_bridge.py --headless   # terminal mode
@@ -119,7 +116,7 @@ py -3 aprova_ai_bridge.py -d           # daemon (background)
 py -3 aprova_ai_bridge.py -f           # force restart (mata instância anterior)
 ```
 
-**Requisitos:** Python 3.10+, `ANTHROPIC_API_KEY` na env, Claude Code CLI instalado
+**Requisitos:** Python 3.10+, Claude Code CLI instalado e autenticado (`claude login`)
 
 ### 2. Chrome Extension
 
@@ -177,7 +174,7 @@ O ficheiro `CLAUDE.md` no root do projecto aprova.ai documenta esta convenção.
 
 - Bridge escuta **apenas** em `localhost:9090` (nunca exposto à rede)
 - CORS restrito a `chrome-extension://` e `localhost`
-- Sem credenciais próprias — usa `ANTHROPIC_API_KEY` da env
+- Sem credenciais próprias — usa a autenticação do Claude Code CLI
 - Screenshots temporários apagados após análise
 - Working directory fixo: `C:\trabalhos\aprova.ai`
 
