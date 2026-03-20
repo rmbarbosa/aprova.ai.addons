@@ -6,6 +6,107 @@
 
 const BRIDGE_URL = "http://localhost:9090";
 
+// Open side panel when extension icon is clicked
+chrome.action.onClicked.addListener((tab) => {
+  chrome.sidePanel.open({ tabId: tab.id });
+});
+
+// ---------------------------------------------------------------------------
+// Context menu — "Scan Opções" for select fields
+// ---------------------------------------------------------------------------
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: "scan-select-options",
+    title: "Scan Opções",
+    contexts: ["all"],
+  });
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== "scan-select-options" || !tab?.id) return;
+
+  chrome.tabs.sendMessage(tab.id, { action: "scan-select-options" }, (data) => {
+    if (chrome.runtime.lastError || !data || data.error) return;
+
+    // Format options as readable text for the input box
+    const items = data.fields || [data];
+    const lines = items.map((f) => {
+      const id = f.label || f.name || "Campo";
+      const optionsList = f.options.map((o) => o.text).join(", ");
+      if (f.columnHeader) {
+        return `${f.columnHeader}: ${id}:\n${optionsList}`;
+      }
+      return `[${id}]: ${optionsList}`;
+    });
+    const text = lines.join("\n");
+
+    // Send to side panel to insert into input box
+    chrome.runtime.sendMessage({ action: "insert-field-options", text });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Full-page screenshot via DevTools Protocol
+// ---------------------------------------------------------------------------
+
+function debuggerSend(target, method, params = {}) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.sendCommand(target, method, params, (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(result);
+      }
+    });
+  });
+}
+
+async function captureFullPage() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) throw new Error("No active tab");
+
+  const target = { tabId: tab.id };
+
+  // Attach debugger
+  await new Promise((resolve, reject) => {
+    chrome.debugger.attach(target, "1.3", () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+
+  try {
+    // Get full page dimensions
+    const layout = await debuggerSend(target, "Page.getLayoutMetrics");
+    const { width, height } = layout.cssContentSize || layout.contentSize;
+
+    // Override device metrics to full page size
+    await debuggerSend(target, "Emulation.setDeviceMetricsOverride", {
+      width: Math.ceil(width),
+      height: Math.ceil(height),
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+
+    // Wait a beat for re-layout
+    await new Promise((r) => setTimeout(r, 150));
+
+    // Capture screenshot
+    const screenshot = await debuggerSend(target, "Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: true,
+    });
+
+    // Reset device metrics
+    await debuggerSend(target, "Emulation.clearDeviceMetricsOverride");
+
+    return `data:image/png;base64,${screenshot.data}`;
+  } finally {
+    // Always detach
+    chrome.debugger.detach(target, () => {});
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Bridge API helpers
 // ---------------------------------------------------------------------------
@@ -35,6 +136,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       switch (msg.action) {
         case "bridge-status":
           sendResponse(await bridgeRequest("/status"));
+          break;
+
+        case "capture-tab":
+          try {
+            const dataUrl = await captureFullPage();
+            sendResponse({ dataUrl });
+          } catch (err) {
+            sendResponse({ error: err.message });
+          }
           break;
 
         case "session-list":
@@ -113,14 +223,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           );
           break;
 
-        case "ask":
-          sendResponse(
-            await bridgeRequest("/ask", "POST", {
-              project: msg.project,
-              question: msg.question,
-            })
-          );
+        case "ask": {
+          const askBody = {
+            project: msg.project,
+            question: msg.question,
+          };
+          if (msg.pageScan) askBody.pageScan = msg.pageScan;
+          if (msg.screenshot) askBody.screenshot = msg.screenshot;
+          sendResponse(await bridgeRequest("/ask", "POST", askBody));
           break;
+        }
 
         case "validate": {
           const [vTab] = await chrome.tabs.query({
@@ -142,6 +254,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           );
           break;
         }
+
+        case "push-page-state":
+          sendResponse(
+            await bridgeRequest("/browser/state", "POST", {
+              pageScan: msg.pageScan,
+              tabUrl: msg.url,
+              tabTitle: msg.title,
+              timestamp: Date.now() / 1000,
+            })
+          );
+          break;
 
         case "execute-actions-on-page": {
           // Forward actions to content script

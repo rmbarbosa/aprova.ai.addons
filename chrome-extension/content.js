@@ -308,6 +308,14 @@ async function executeActions(actions, confirmMode) {
 // Message handler — from background/popup
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Context menu support — track the right-clicked element
+// ---------------------------------------------------------------------------
+let lastContextTarget = null;
+document.addEventListener("contextmenu", (e) => {
+  lastContextTarget = e.target;
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     switch (msg.action) {
@@ -322,6 +330,126 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         );
         sendResponse({ results });
         break;
+
+      case "scan-select-options": {
+        // Try to find a select near the right-clicked element
+        const el = lastContextTarget;
+        let selects = [];
+        const directSelect = el?.closest?.("select") || el?.querySelector?.("select");
+        if (directSelect) {
+          selects = [directSelect];
+        } else {
+          // Scan all visible selects on the page
+          selects = [...document.querySelectorAll("select")].filter(
+            (s) => s.offsetParent !== null && s.options.length > 0
+          );
+        }
+        if (selects.length === 0) {
+          sendResponse({ error: "no-select" });
+          break;
+        }
+        const result = selects.map((select) => {
+          const lbl = select.id
+            ? document.querySelector(`label[for="${CSS.escape(select.id)}"]`)?.textContent?.trim()
+            : null;
+          const closestLbl = select.closest("label")?.textContent?.trim();
+          const options = [...select.options]
+            .filter((o) => o.value)
+            .map((o) => ({ value: o.value, text: o.text.trim() }));
+
+          // Detect table context — column header
+          let columnHeader = null;
+          const td = select.closest("td, th");
+          if (td) {
+            const row = td.parentElement;
+            const colIdx = [...row.children].indexOf(td);
+            const table = td.closest("table");
+            if (table && colIdx >= 0) {
+              const headerRow = table.querySelector("thead tr") || table.querySelector("tr");
+              if (headerRow) {
+                const th = headerRow.children[colIdx];
+                if (th) columnHeader = th.textContent.trim();
+              }
+            }
+          }
+
+          return {
+            label: lbl || closestLbl || select.name || select.id || "",
+            name: select.name || null,
+            selector: buildUniqueSelector(select),
+            currentValue: select.value,
+            columnHeader,
+            options,
+          };
+        });
+        sendResponse(result.length === 1 ? result[0] : { fields: result });
+        break;
+      }
+
+      case "describe-form-structure": {
+        // Walk all visible form fields left-to-right (DOM order),
+        // for selects: click to trigger dynamic loading, wait, read options.
+        const allFields = [...document.querySelectorAll("input, textarea, select")]
+          .filter((el) => el.offsetParent !== null || el.type === "hidden");
+
+        const lines = [];
+        lines.push(`Página: ${document.title}`);
+        lines.push(`URL: ${location.href}`);
+        const headings = [...document.querySelectorAll("h1, h2, h3")].slice(0, 5).map((h) => h.textContent.trim());
+        if (headings.length) lines.push(`Secções: ${headings.join(" > ")}`);
+        lines.push("");
+
+        for (const el of allFields) {
+          const lbl = el.id
+            ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim()
+            : null;
+          const closestLbl = el.closest("label")?.textContent?.trim();
+          const label = lbl || closestLbl || el.placeholder || el.getAttribute("aria-label") || el.name || el.id || "(sem label)";
+          const req = el.required || el.getAttribute("aria-required") === "true" ? " *" : "";
+
+          if (el.tagName === "SELECT") {
+            // Force open/focus to trigger dynamic option loading
+            try {
+              el.focus();
+              el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+              // Small wait for dynamic options to load
+              await new Promise((r) => setTimeout(r, 150));
+              // Close it back
+              el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+              el.blur();
+            } catch (_) {}
+
+            const opts = [...el.options]
+              .filter((o) => o.value)
+              .map((o) => o.text.trim())
+              .filter((t) => t);
+            const current = el.options[el.selectedIndex]?.text?.trim() || "";
+            if (opts.length > 0) {
+              lines.push(`[SELECT${req}] ${label} (actual: "${current}")`);
+              lines.push(`  Opções: ${opts.join(" | ")}`);
+            } else {
+              lines.push(`[SELECT${req}] ${label} (actual: "${current}") — sem opções carregadas`);
+            }
+          } else if (el.type === "radio") {
+            lines.push(`[RADIO${req}] ${label} — ${el.checked ? "seleccionado" : "não seleccionado"} (value: "${el.value}")`);
+          } else if (el.type === "checkbox") {
+            lines.push(`[CHECKBOX${req}] ${label} — ${el.checked ? "marcado" : "desmarcado"}`);
+          } else if (el.type === "hidden") {
+            // skip hidden fields in description
+          } else if (el.tagName === "TEXTAREA") {
+            const val = el.value ? `"${el.value.substring(0, 80)}${el.value.length > 80 ? "..." : ""}"` : "(vazio)";
+            const ml = el.maxLength > 0 ? ` [max: ${el.maxLength}]` : "";
+            lines.push(`[TEXTAREA${req}] ${label}${ml} — ${val}`);
+          } else {
+            const val = el.value ? `"${el.value}"` : "(vazio)";
+            const ml = el.maxLength > 0 ? ` [max: ${el.maxLength}]` : "";
+            lines.push(`[${el.type.toUpperCase()}${req}] ${label}${ml} — ${val}`);
+          }
+        }
+
+        sendResponse({ text: lines.join("\n"), fieldCount: allFields.length });
+        break;
+      }
 
       default:
         sendResponse({ error: `Unknown content action: ${msg.action}` });
@@ -341,4 +469,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   badge.textContent = "A";
   badge.title = "Aprova.ai Extension active";
   document.body.appendChild(badge);
+
+  // --- Push browser state to bridge server ---
+
+  function pushState() {
+    chrome.runtime.sendMessage({
+      action: "push-page-state",
+      pageScan: scanPage(),
+      url: location.href,
+      title: document.title,
+    });
+  }
+
+  // Push on load
+  pushState();
+
+  // Push on SPA navigation
+  window.addEventListener("popstate", pushState);
+  window.addEventListener("hashchange", pushState);
+
+  // Push on DOM changes (debounced 2s)
+  let pushTimer = null;
+  const observer = new MutationObserver(() => {
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(pushState, 2000);
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // Heartbeat every 30s
+  setInterval(pushState, 30000);
 })();

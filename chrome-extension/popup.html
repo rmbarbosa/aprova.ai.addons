@@ -33,8 +33,8 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      width: 400px;
-      height: 520px;
+      width: 100%;
+      height: 100vh;
       font-family: var(--font);
       background: var(--bg-primary);
       color: var(--text-primary);
@@ -42,6 +42,12 @@
       flex-direction: column;
       overflow: hidden;
     }
+
+    /* ---- Lobby / Connected screen toggling ---- */
+    body.no-session .connected-ui { display: none !important; }
+    body.no-session .lobby { display: flex !important; }
+    body:not(.no-session) .lobby { display: none !important; }
+    body:not(.no-session) .connected-ui { /* keep default display */ }
 
     /* ---- Header ---- */
     .header {
@@ -60,14 +66,10 @@
       border-radius: 8px;
       display: flex; align-items: center; justify-content: center;
       font-weight: 800; font-size: 16px; color: var(--bg-primary);
+      flex-shrink: 0;
     }
 
-    .header-title {
-      font-size: 14px; font-weight: 700; flex: 1;
-      letter-spacing: -0.01em;
-    }
-
-    .header-title span { color: var(--accent); }
+    .header-spacer { flex: 1; }
 
     .status-dot {
       width: 8px; height: 8px; border-radius: 50%;
@@ -85,7 +87,137 @@
       50% { opacity: 0.4; }
     }
 
-    /* ---- Project selector ---- */
+    /* ---- Lobby Screen ---- */
+    .lobby {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      padding: 32px 24px;
+      gap: 20px;
+    }
+
+    .lobby-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .lobby-subpanel {
+      display: none;
+      width: 100%;
+      max-width: 320px;
+    }
+
+    .lobby-subpanel.visible { display: block; }
+
+    /* Session list cards */
+    .session-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .session-list::-webkit-scrollbar { width: 4px; }
+    .session-list::-webkit-scrollbar-track { background: transparent; }
+    .session-list::-webkit-scrollbar-thumb {
+      background: var(--text-muted);
+      border-radius: 2px;
+    }
+
+    .session-card {
+      padding: 8px 12px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .session-card .session-id {
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    .session-card .session-msg {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session-list-empty {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+      padding: 12px;
+    }
+
+    .session-list-loading {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+      padding: 12px;
+    }
+
+    .lobby-section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .lobby-select {
+      width: 100%;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-family: var(--font);
+      cursor: pointer;
+    }
+
+    .lobby-select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .lobby-connect-btn {
+      width: 100%;
+      max-width: 320px;
+      padding: 10px 16px;
+      background: var(--accent);
+      color: var(--bg-primary);
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      font-family: var(--font);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .lobby-connect-btn:hover:not(:disabled) { background: #22c55e; }
+    .lobby-connect-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .lobby-error {
+      font-size: 12px;
+      color: var(--error);
+      text-align: center;
+      display: none;
+    }
+
+    .lobby-error.visible { display: block; }
+
+    /* ---- Project selector (connected) ---- */
     .project-bar {
       display: flex;
       align-items: center;
@@ -164,7 +296,12 @@
       cursor: not-allowed;
     }
 
-    .action-btn .icon { font-size: 16px; }
+    .action-btn .icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 16px;
+    }
 
     /* ---- Chat area ---- */
     .chat {
@@ -203,11 +340,219 @@
       color: var(--text-primary);
     }
 
+    /* ---- Markdown rendered content inside boris messages ---- */
+    .msg.boris p { margin: 0 0 6px 0; }
+    .msg.boris p:last-child { margin-bottom: 0; }
+
+    .msg.boris strong { color: #fff; font-weight: 700; }
+    .msg.boris em { color: var(--accent-blue); font-style: italic; }
+
+    .msg.boris h1, .msg.boris h2, .msg.boris h3, .msg.boris h4 {
+      color: var(--accent);
+      margin: 8px 0 4px 0;
+      line-height: 1.3;
+    }
+    .msg.boris h1 { font-size: 15px; }
+    .msg.boris h2 { font-size: 14px; }
+    .msg.boris h3 { font-size: 13px; }
+    .msg.boris h4 { font-size: 12px; }
+
+    .msg.boris code {
+      background: rgba(0,0,0,0.3);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--accent);
+    }
+
+    .msg.boris pre {
+      position: relative;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin: 6px 0;
+      overflow-x: auto;
+    }
+    .msg.boris pre::-webkit-scrollbar { width: 6px; height: 6px; }
+    .msg.boris pre::-webkit-scrollbar-track { background: #6A6A6A; border-radius: 3px; }
+    .msg.boris pre::-webkit-scrollbar-thumb { background: #AEAEAE; border-radius: 3px; }
+    .msg.boris pre::-webkit-scrollbar-corner { background: #6A6A6A; }
+
+    .msg.boris pre code {
+      background: none;
+      padding: 0;
+      font-size: 11px;
+      color: var(--text-primary);
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      background: rgba(22, 22, 40, 0.85);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+      padding: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+      opacity: 0;
+    }
+
+    .msg.boris pre:hover .copy-btn { opacity: 1; }
+
+    .copy-btn:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: rgba(30, 30, 50, 0.9);
+    }
+
+    .copy-btn.copied {
+      color: var(--accent);
+      border-color: var(--accent);
+      opacity: 1;
+    }
+
+    .msg.boris ul {
+      margin: 4px 0;
+      padding-left: 16px;
+      list-style: disc;
+    }
+    .msg.boris ul li {
+      padding: 1px 0;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .msg.boris table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 6px 0;
+      font-size: 11px;
+    }
+    .msg.boris th {
+      background: rgba(0,0,0,0.3);
+      color: var(--accent);
+      font-weight: 700;
+      text-align: left;
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+    }
+    .msg.boris td {
+      padding: 3px 8px;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+    .msg.boris tr:hover td {
+      background: rgba(74, 222, 128, 0.05);
+    }
+
+    .msg.boris hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 8px 0;
+    }
+
+    /* ---- Screenshot preview in chat ---- */
+    .msg.user img.screenshot-preview {
+      width: 120px;
+      height: auto;
+      max-height: 120px;
+      object-fit: cover;
+      border-radius: 6px;
+      margin-top: 4px;
+      border: 1px solid rgba(74, 222, 128, 0.2);
+      cursor: pointer;
+      transition: transform 0.15s;
+    }
+
+    .msg.user img.screenshot-preview:hover {
+      transform: scale(1.05);
+    }
+
+    /* Full-size overlay on click */
+    .screenshot-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      cursor: pointer;
+      animation: fadeIn 0.15s ease;
+    }
+
+    .screenshot-overlay img {
+      max-width: 95%;
+      max-height: 95%;
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+
+    /* ---- Step / thinking messages ---- */
+    .msg.step {
+      align-self: flex-start;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 11px;
+      padding: 0 8px;
+      margin: -3px 0;
+      line-height: 1.2;
+      font-family: var(--font-mono);
+      animation: fadeIn 0.15s ease;
+    }
+
+    .msg.step::before {
+      content: "› ";
+      color: var(--accent-dim);
+    }
+
+    /* ---- Processing indicator ---- */
+    .processing {
+      align-self: flex-start;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      font-size: 11px;
+      color: var(--text-muted);
+      animation: fadeIn 0.2s ease;
+    }
+
+    .processing-dots {
+      display: flex;
+      gap: 3px;
+    }
+
+    .processing-dots span {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: dotPulse 1.4s ease-in-out infinite;
+    }
+
+    .processing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .processing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes dotPulse {
+      0%, 80%, 100% { opacity: 0.15; transform: scale(0.8); }
+      40% { opacity: 1; transform: scale(1); }
+    }
+
     .msg.user {
       align-self: flex-end;
       background: var(--accent-dim);
       border: 1px solid rgba(74, 222, 128, 0.25);
       color: var(--accent);
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     .msg.system {
@@ -278,31 +623,144 @@
     /* ---- Input area ---- */
     .input-area {
       display: flex;
-      gap: 8px;
-      padding: 10px 16px;
+      flex-direction: column;
+      padding: 0 16px 10px 16px;
       background: var(--bg-secondary);
       border-top: 1px solid var(--border);
       flex-shrink: 0;
     }
 
-    .input-area input {
-      flex: 1;
-      background: var(--bg-input);
-      color: var(--text-primary);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 12px;
-      font-size: 13px;
-      font-family: var(--font);
+    .input-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
     }
 
-    .input-area input:focus {
-      outline: none;
+    /* Attachment preview */
+    .attach-preview {
+      display: none;
+      padding: 8px 0 4px 0;
+    }
+
+    .attach-preview.visible { display: block; }
+
+    .attach-preview-inner {
+      position: relative;
+      display: inline-block;
+    }
+
+    .attach-preview-inner img {
+      width: 64px;
+      height: 64px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+
+    .attach-preview-remove {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+
+    .attach-preview-remove:hover {
+      background: var(--error);
+      border-color: var(--error);
+      color: #fff;
+    }
+
+    /* Doc-style attachment thumbnail */
+    .attach-preview-doc {
+      width: 64px;
+      height: 64px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg-tertiary);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      color: var(--accent-blue);
+    }
+
+    .attach-preview-doc .doc-label {
+      font-size: 8px;
+      color: var(--text-muted);
+      text-align: center;
+      line-height: 1.1;
+    }
+
+    /* Doc thumbnail in user chat bubble */
+    .msg.user .form-desc-thumb {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      width: 80px;
+      height: 56px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(96, 165, 250, 0.3);
+      border-radius: 6px;
+      margin-bottom: 4px;
+      vertical-align: top;
+      color: var(--accent-blue);
+      font-size: 8px;
+    }
+
+    .input-box {
+      flex: 1;
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 4px 4px 4px 4px;
+      transition: border-color 0.15s;
+    }
+
+    .input-box:focus-within {
       border-color: var(--accent);
     }
 
-    .input-area input::placeholder {
+    .input-box textarea {
+      flex: 1;
+      background: transparent;
+      color: var(--text-primary);
+      border: none;
+      padding: 4px 8px;
+      font-size: 13px;
+      font-family: var(--font);
+      resize: none;
+      min-height: 28px;
+      max-height: 110px;
+      overflow-y: auto;
+      line-height: 1.4;
+      outline: none;
+    }
+
+    .input-box textarea::placeholder {
       color: var(--text-muted);
+    }
+
+    .input-box textarea::-webkit-scrollbar { width: 3px; }
+    .input-box textarea::-webkit-scrollbar-track { background: transparent; }
+    .input-box textarea::-webkit-scrollbar-thumb {
+      background: var(--text-muted);
+      border-radius: 2px;
     }
 
     .send-btn {
@@ -320,8 +778,80 @@
       transition: background 0.15s;
     }
 
+    .attach-wrapper {
+      position: relative;
+      flex-shrink: 0;
+      align-self: flex-end;
+    }
+
+    .attach-btn {
+      background: none;
+      color: var(--text-muted);
+      border: none;
+      border-radius: 50%;
+      width: 28px;
+      height: 28px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+
+    .attach-btn:hover {
+      color: var(--text-primary);
+    }
+
+    .attach-btn.open {
+      color: var(--accent);
+      transform: rotate(45deg);
+    }
+
+    .attach-menu {
+      display: none;
+      position: absolute;
+      bottom: 36px;
+      left: -4px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 4px;
+      min-width: 200px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      animation: fadeIn 0.15s ease;
+    }
+
+    .attach-menu.open { display: block; }
+
+    .attach-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 10px;
+      background: none;
+      border: none;
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-family: var(--font);
+      cursor: pointer;
+      transition: all 0.1s;
+    }
+
+    .attach-menu-item:hover {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+
     .send-btn:hover { background: #22c55e; }
     .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .send-btn.stop-mode {
+      background: var(--error);
+      font-size: 12px;
+    }
+    .send-btn.stop-mode:hover { background: #dc2626; }
 
     /* ---- Settings panel ---- */
     .settings-toggle {
@@ -329,8 +859,9 @@
       border: none;
       color: var(--text-muted);
       cursor: pointer;
-      font-size: 16px;
       padding: 2px;
+      display: flex;
+      align-items: center;
     }
 
     .settings-toggle:hover { color: var(--text-secondary); }
@@ -389,23 +920,6 @@
       background: var(--accent);
     }
 
-    .session-selector {
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid var(--border);
-    }
-
-    .session-selector select {
-      width: 100%;
-      background: var(--bg-tertiary);
-      color: var(--text-primary);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 5px 8px;
-      font-size: 11px;
-      font-family: var(--font-mono);
-    }
-
     .disconnect-btn {
       margin-top: 8px;
       width: 100%;
@@ -439,18 +953,48 @@
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
-<body>
+<body class="no-session">
 
   <!-- Header -->
   <div class="header">
     <div class="header-logo">A</div>
-    <div class="header-title">Aprova<span>.ai</span></div>
-    <button class="settings-toggle" id="settingsToggle" title="Settings">&#9881;</button>
+    <div class="header-spacer"></div>
+    <button class="settings-toggle connected-ui" id="settingsToggle" title="Settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="9" cy="18" r="2" fill="currentColor"/></svg></button>
     <div class="status-dot" id="statusDot" title="Disconnected"></div>
   </div>
 
+  <!-- =============== LOBBY (Screen 1) =============== -->
+  <div class="lobby" id="lobby">
+    <div class="lobby-title">Aprova.ai Extension</div>
+
+    <!-- Live Claude sessions (informational) -->
+    <div class="lobby-subpanel visible" id="panelExisting">
+      <div class="lobby-section-label">Sessões Claude Code activas</div>
+      <div class="session-list" id="sessionList">
+        <div class="session-list-loading"><span class="loading"></span>A carregar...</div>
+      </div>
+    </div>
+
+    <!-- Project picker -->
+    <div class="lobby-subpanel visible">
+      <div class="lobby-section-label">Projecto</div>
+      <select id="lobbyProjectSelect" class="lobby-select">
+        <option value="enredo-astuto-2026">enredo-astuto-2026</option>
+        <option value="oasisRiver-regua-2026">oasisRiver-regua-2026</option>
+        <option value="vilabelosj.2026.TemplosPingentes">vilabelosj.2026.TemplosPingentes</option>
+        <option value="sifide-2025-patolai">sifide-2025-patolai</option>
+      </select>
+    </div>
+
+    <div class="lobby-error" id="lobbyError"></div>
+
+    <button class="lobby-connect-btn" id="lobbyConnectBtn">Iniciar Sessão</button>
+  </div>
+
+  <!-- =============== CONNECTED UI (Screen 2) =============== -->
+
   <!-- Settings Panel (collapsible) -->
-  <div class="settings-panel" id="settingsPanel">
+  <div class="settings-panel connected-ui" id="settingsPanel">
     <div class="setting-row">
       <span>Modo Confirmar</span>
       <label class="toggle-switch">
@@ -458,19 +1002,12 @@
         <span class="toggle-slider"></span>
       </label>
     </div>
-    <div class="session-selector">
-      <div class="setting-row" style="margin-bottom:4px">
-        <span>Sessão existente</span>
-      </div>
-      <select id="sessionSelect">
-        <option value="">Nova sessão</option>
-      </select>
-    </div>
-    <button class="disconnect-btn" id="disconnectBtn">Disconnect</button>
+    <button class="disconnect-btn" id="clearChatBtn" style="background:rgba(96,165,250,0.1);color:var(--accent-blue);border-color:rgba(96,165,250,0.3)">Limpar Conversa</button>
+    <button class="disconnect-btn" id="disconnectBtn">Desligar Sessão</button>
   </div>
 
-  <!-- Project selector + connect -->
-  <div class="project-bar">
+  <!-- Project selector (scope for chat/fill/validate) -->
+  <div class="project-bar connected-ui">
     <label>Projecto</label>
     <select id="projectSelect">
       <option value="enredo-astuto-2026">enredo-astuto-2026</option>
@@ -480,35 +1017,50 @@
     </select>
   </div>
 
-  <!-- Action bar -->
-  <div class="action-bar">
-    <button class="action-btn" id="btnConnect" title="Connect session">
-      <span class="icon">&#9654;</span>
-      Connect
-    </button>
-    <button class="action-btn" id="btnScan" disabled title="Scan page fields">
-      <span class="icon">&#128269;</span>
+  <!-- Action bar (no Connect button) -->
+  <div class="action-bar connected-ui">
+    <button class="action-btn" id="btnScan" title="Scan page fields">
+      <span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
       Scan
     </button>
-    <button class="action-btn" id="btnFill" disabled title="Fill page fields">
-      <span class="icon">&#9997;</span>
+    <button class="action-btn" id="btnFill" title="Fill page fields">
+      <span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></span>
       Fill
     </button>
-    <button class="action-btn" id="btnValidate" disabled title="Validate values">
-      <span class="icon">&#10003;</span>
+    <button class="action-btn" id="btnValidate" title="Validate values">
+      <span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
       Validate
     </button>
   </div>
 
   <!-- Chat area -->
-  <div class="chat" id="chat">
+  <div class="chat connected-ui" id="chat">
     <div class="msg system">Aprova.ai Extension v1.0 — ready</div>
   </div>
 
   <!-- Input (Ask Boris) -->
-  <div class="input-area">
-    <input type="text" id="askInput" placeholder="Ask Boris..." disabled>
-    <button class="send-btn" id="sendBtn" disabled title="Send">&#10148;</button>
+  <div class="input-area connected-ui">
+    <!-- Pending attachment preview -->
+    <div class="attach-preview" id="attachPreview">
+      <div class="attach-preview-inner">
+        <img id="attachPreviewImg" src="" alt="screenshot">
+        <button class="attach-preview-remove" id="attachPreviewRemove"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </div>
+    <div class="input-row">
+      <div class="input-box">
+        <div class="attach-wrapper">
+          <button class="attach-btn" id="attachBtn" title="Anexar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+          <div class="attach-menu" id="attachMenu">
+            <button class="attach-menu-item" id="screenshotBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M3 9h2M19 9h2M9 3v2M9 19v2M15 3v2M15 19v2"/></svg>Screenshot da página</button>
+            <button class="attach-menu-item" id="pageTitleBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="8" y1="20" x2="16" y2="20"/></svg>Título da página</button>
+            <button class="attach-menu-item" id="describeFormBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>Describe Form Structure</button>
+          </div>
+        </div>
+        <textarea id="askInput" placeholder="Ask Boris..." rows="1"></textarea>
+      </div>
+      <button class="send-btn" id="sendBtn" title="Send"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
+    </div>
   </div>
 
   <script src="popup.js"></script>

@@ -1,0 +1,6 @@
+flask
+flask-cors
+claude-code-sdk
+pystray
+pillow
+waitress

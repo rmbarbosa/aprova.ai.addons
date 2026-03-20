@@ -6,27 +6,29 @@
   "author": "Rui Barbosa @rmblda 2026",
   "permissions": [
     "activeTab",
-    "storage"
+    "storage",
+    "sidePanel",
+    "debugger",
+    "contextMenus"
   ],
   "host_permissions": [
-    "http://localhost:9090/*"
+    "http://localhost:9090/*",
+    "<all_urls>"
   ],
   "action": {
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
   },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
   "content_scripts": [
     {
       "matches": [
-        "https://balcao.portugal2030.pt/*",
-        "https://balcao2030.gov.pt/*",
-        "https://balcao.fundoseuropeus.pt/*",
-        "https://*.iapmei.pt/*",
-        "https://*.compete2020.gov.pt/*"
+        "<all_urls>"
       ],
       "js": ["content.js"],
       "css": ["styles.css"],
