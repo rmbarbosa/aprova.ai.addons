@@ -193,21 +193,28 @@ function showConfirmOverlay(action) {
     };
 
     const target = findElement(action);
-    const valuePreview = action.value
-      ? `<div class="aprova-confirm-value">${action.value}</div>`
-      : "";
 
     overlay.innerHTML = `
       <div class="aprova-confirm-box">
         <div class="aprova-confirm-type">${labels[action.type] || action.type}</div>
         <div class="aprova-confirm-desc">${action.description || action.selector || ""}</div>
-        ${valuePreview}
+        ${action.value ? '<textarea class="aprova-confirm-value" readonly></textarea>' : ""}
         <div class="aprova-confirm-buttons">
           <button class="aprova-btn aprova-btn-yes">OK</button>
           <button class="aprova-btn aprova-btn-skip">Skip</button>
           <button class="aprova-btn aprova-btn-stop">Stop</button>
         </div>
       </div>`;
+
+    // Set value via property (not innerHTML) to avoid HTML injection
+    const valueEl = overlay.querySelector(".aprova-confirm-value");
+    if (valueEl) {
+      valueEl.value = action.value;
+      // Auto-size: use scrollHeight but cap at 60vh
+      valueEl.style.height = "auto";
+      const maxH = window.innerHeight * 0.6;
+      valueEl.style.height = Math.min(valueEl.scrollHeight + 4, maxH) + "px";
+    }
 
     overlay.querySelector(".aprova-btn-yes").onclick = () => {
       overlay.remove();
