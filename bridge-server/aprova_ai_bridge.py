@@ -28,7 +28,7 @@ from flask_cors import CORS
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-PROJECT_DIR = Path(r"C:\trabalhos\aprova.ai")
+PROJECT_DIR = Path(os.environ.get("APROVA_PROJECT_DIR", r"C:\trabalhos\aprova.ai"))
 HOST = "127.0.0.1"
 PORT = 9090
 
@@ -214,6 +214,18 @@ def status():
     })
 
 
+@app.route("/projects", methods=["GET"])
+def list_projects():
+    """List available project folders inside PROJECT_DIR/projects/."""
+    projects_path = PROJECT_DIR / "projects"
+    names = []
+    if projects_path.is_dir():
+        for entry in sorted(projects_path.iterdir()):
+            if entry.is_dir() and not entry.name.startswith("."):
+                names.append(entry.name)
+    return jsonify({"projects": names})
+
+
 # ---------------------------------------------------------------------------
 # Routes — Browser State (pushed by Chrome extension)
 # ---------------------------------------------------------------------------
@@ -370,11 +382,13 @@ def start_session():
     """Create a new Claude SDK session for a project."""
     data = request.json or {}
     project = data.get("project", "default")
+    extra_prompt = data.get("initialPrompt", "")
 
     try:
-        result, sid, steps = _run_async(_sdk_query(
-            _INIT_PROMPT.format(project=project)
-        ))
+        prompt = _INIT_PROMPT.format(project=project)
+        if extra_prompt:
+            prompt += "\n\n" + extra_prompt
+        result, sid, steps = _run_async(_sdk_query(prompt))
         sessions[project] = {
             "session_id": sid,
             "mode": "created",
@@ -393,14 +407,16 @@ def attach_session():
     data = request.json or {}
     session_id = data.get("sessionId")
     project = data.get("project", "default")
+    extra_prompt = data.get("initialPrompt", "")
 
     if not session_id:
         return jsonify({"error": "sessionId required"}), 400
 
     try:
-        result, sid, steps = _run_async(_sdk_query(
-            _INIT_PROMPT.format(project=project)
-        ))
+        prompt = _INIT_PROMPT.format(project=project)
+        if extra_prompt:
+            prompt += "\n\n" + extra_prompt
+        result, sid, steps = _run_async(_sdk_query(prompt))
         sessions[project] = {
             "session_id": sid,
             "mode": "created",
@@ -810,7 +826,9 @@ def run_flask():
     """Run Flask server (blocking) via waitress production WSGI server."""
     from waitress import serve
     log(f"waitress serving on {_C}http://{HOST}:{PORT}{_R}", "ok")
-    serve(app, host=HOST, port=PORT)
+    serve(app, host=HOST, port=PORT,
+          threads=max(8, os.cpu_count() * 2),
+          channel_timeout=120)
 
 
 # ---------------------------------------------------------------------------
@@ -1018,6 +1036,14 @@ if __name__ == "__main__":
     headless = "--headless" in args
     force    = "-f" in args or "--force" in args
     VERBOSE  = "-v" in args or "--verbose" in args
+
+    # --project-dir <path>
+    for i, a in enumerate(args):
+        if a == "--project-dir" and i + 1 < len(args):
+            PROJECT_DIR = Path(args[i + 1])
+            break
+
+    BROWSER_STATE_FILE = PROJECT_DIR / "tmp" / ".browser-state.json"
 
     if daemon:
         mode = "daemon"

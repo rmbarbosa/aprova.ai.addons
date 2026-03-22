@@ -186,7 +186,114 @@ function highlightElement(el, actionType) {
   }, 10000);
 }
 
-function showConfirmOverlay(action) {
+// ---------------------------------------------------------------------------
+// Diff engine — line-level LCS + word-level highlighting
+// ---------------------------------------------------------------------------
+
+// Line-level LCS → array of { text, type: "equal"|"removed"|"added" }
+function _lineLCS(oldLines, newLines) {
+  const n = oldLines.length, m = newLines.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = 1; i <= n; i++)
+    for (let j = 1; j <= m; j++)
+      dp[i][j] = oldLines[i - 1] === newLines[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+
+  const result = [];
+  let i = n, j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      result.push({ text: oldLines[--i], type: "equal" }); j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.push({ text: newLines[--j], type: "added" });
+    } else {
+      result.push({ text: oldLines[--i], type: "removed" });
+    }
+  }
+  result.reverse();
+  return result;
+}
+
+// Word-level diff between two strings → array of { text, hl: bool }
+function _wordDiff(a, b) {
+  // Split into tokens preserving whitespace
+  const tokenize = (s) => s.match(/\S+|\s+/g) || [];
+  const tokA = tokenize(a), tokB = tokenize(b);
+  const n = tokA.length, m = tokB.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = 1; i <= n; i++)
+    for (let j = 1; j <= m; j++)
+      dp[i][j] = tokA[i - 1] === tokB[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+
+  // Build result for side a (removed tokens highlighted)
+  const aResult = [], bResult = [];
+  let i = n, j = m;
+  const stackA = [], stackB = [];
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && tokA[i - 1] === tokB[j - 1]) {
+      stackA.push({ text: tokA[--i], hl: false }); stackB.push({ text: tokB[--j], hl: false });
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      stackB.push({ text: tokB[--j], hl: true });
+    } else {
+      stackA.push({ text: tokA[--i], hl: true });
+    }
+  }
+  stackA.reverse(); stackB.reverse();
+  return { aTokens: stackA, bTokens: stackB };
+}
+
+// Build full diff model with line numbers + word-level highlights
+function computeDiffModel(oldText, newText) {
+  const oldLines = oldText.split("\n");
+  const newLines = newText.split("\n");
+  const raw = _lineLCS(oldLines, newLines);
+
+  // Pair adjacent removed/added blocks for word-level diff
+  const entries = [];
+  let oldNum = 0, newNum = 0;
+  let idx = 0;
+
+  while (idx < raw.length) {
+    if (raw[idx].type === "equal") {
+      oldNum++; newNum++;
+      entries.push({ type: "equal", text: raw[idx].text, oldNum, newNum });
+      idx++;
+    } else {
+      // Collect contiguous removed + added block
+      const removed = [], added = [];
+      while (idx < raw.length && raw[idx].type === "removed") removed.push(raw[idx++]);
+      while (idx < raw.length && raw[idx].type === "added") added.push(raw[idx++]);
+
+      // Pair them for word-level diff
+      const pairs = Math.min(removed.length, added.length);
+      for (let p = 0; p < pairs; p++) {
+        const wd = _wordDiff(removed[p].text, added[p].text);
+        oldNum++;
+        entries.push({ type: "removed", tokens: wd.aTokens, oldNum, newNum: null });
+        newNum++;
+        entries.push({ type: "added", tokens: wd.bTokens, oldNum: null, newNum });
+      }
+      // Remaining unpaired
+      for (let p = pairs; p < removed.length; p++) {
+        oldNum++;
+        entries.push({ type: "removed", tokens: [{ text: removed[p].text, hl: true }], oldNum, newNum: null });
+      }
+      for (let p = pairs; p < added.length; p++) {
+        newNum++;
+        entries.push({ type: "added", tokens: [{ text: added[p].text, hl: true }], oldNum: null, newNum });
+      }
+    }
+  }
+  return entries;
+}
+
+// ---------------------------------------------------------------------------
+// Confirmation overlay
+// ---------------------------------------------------------------------------
+function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "aprova-confirm-overlay";
@@ -202,23 +309,90 @@ function showConfirmOverlay(action) {
     };
 
     const target = findElement(action);
+    const useDiff = action.type === "fill_text" && currentValue != null && currentValue.length > 0;
 
-    overlay.innerHTML = `
-      <div class="aprova-confirm-box">
-        <div class="aprova-confirm-type">${labels[action.type] || action.type}</div>
-        <div class="aprova-confirm-desc">${action.description || action.selector || ""}</div>
-        ${action.value ? '<textarea class="aprova-confirm-value" readonly></textarea>' : ""}
-        <div class="aprova-confirm-buttons">
-          <button class="aprova-btn aprova-btn-yes">OK</button>
-          <button class="aprova-btn aprova-btn-skip">Skip</button>
-          <button class="aprova-btn aprova-btn-stop">Stop</button>
-        </div>
-      </div>`;
+    if (useDiff) {
+      // ── GitHub-style unified diff with word-level highlights ──
+      overlay.innerHTML = `
+        <div class="aprova-confirm-box aprova-confirm-box--diff">
+          <div class="aprova-confirm-top-bar">
+            <div class="aprova-confirm-type">${labels[action.type] || action.type}</div>
+            <div class="aprova-confirm-desc">${action.description || action.selector || ""}</div>
+          </div>
+          <div class="aprova-diff-viewer">
+            <table class="aprova-diff-table"><tbody></tbody></table>
+          </div>
+          <div class="aprova-confirm-buttons">
+            <button class="aprova-btn aprova-btn-stop">Abortar</button>
+            <button class="aprova-btn aprova-btn-skip">Saltar Próximo</button>
+            <button class="aprova-btn aprova-btn-yes">Aplicar</button>
+          </div>
+        </div>`;
 
-    // Set value via property (not innerHTML) to avoid HTML injection
-    const valueEl = overlay.querySelector(".aprova-confirm-value");
-    if (valueEl) {
-      valueEl.value = action.value;
+      const entries = computeDiffModel(currentValue, action.value);
+      const tbody = overlay.querySelector(".aprova-diff-table tbody");
+
+      for (const entry of entries) {
+        const tr = document.createElement("tr");
+        tr.className = `aprova-diff-row aprova-diff-row--${entry.type}`;
+
+        // Old line number
+        const tdOld = document.createElement("td");
+        tdOld.className = "aprova-diff-num";
+        tdOld.textContent = entry.oldNum ?? "";
+        tr.appendChild(tdOld);
+
+        // New line number
+        const tdNew = document.createElement("td");
+        tdNew.className = "aprova-diff-num";
+        tdNew.textContent = entry.newNum ?? "";
+        tr.appendChild(tdNew);
+
+        // Marker column
+        const tdMark = document.createElement("td");
+        tdMark.className = "aprova-diff-mark";
+        tdMark.textContent = entry.type === "removed" ? "\u2212" : entry.type === "added" ? "+" : "";
+        tr.appendChild(tdMark);
+
+        // Content column
+        const tdContent = document.createElement("td");
+        tdContent.className = "aprova-diff-text";
+
+        if (entry.type === "equal") {
+          tdContent.textContent = entry.text || "\u00A0";
+        } else {
+          // Word-level tokens with highlights
+          for (const tok of entry.tokens) {
+            const span = document.createElement("span");
+            if (tok.hl) span.className = "aprova-diff-hl";
+            span.textContent = tok.text;
+            tdContent.appendChild(span);
+          }
+          if (!entry.tokens.length) tdContent.textContent = "\u00A0";
+        }
+
+        tr.appendChild(tdContent);
+        tbody.appendChild(tr);
+      }
+
+    } else {
+      // ── Simple view (non-diff) ──
+      overlay.innerHTML = `
+        <div class="aprova-confirm-box">
+          <div class="aprova-confirm-type">${labels[action.type] || action.type}</div>
+          <div class="aprova-confirm-desc">${action.description || action.selector || ""}</div>
+          ${action.value ? '<textarea class="aprova-confirm-value" readonly></textarea>' : ""}
+          <div class="aprova-confirm-buttons">
+            <button class="aprova-btn aprova-btn-stop">Abortar</button>
+            <button class="aprova-btn aprova-btn-skip">Saltar Próximo</button>
+            <button class="aprova-btn aprova-btn-yes">Aplicar</button>
+          </div>
+        </div>`;
+
+      const valueEl = overlay.querySelector(".aprova-confirm-value");
+      if (valueEl) {
+        valueEl.value = action.value;
+      }
     }
 
     function dismiss(result) {
@@ -229,18 +403,21 @@ function showConfirmOverlay(action) {
     }
 
     overlay.querySelector(".aprova-btn-yes").onclick = () => dismiss(true);
-    overlay.querySelector(".aprova-btn-skip").onclick = () => dismiss(false);
+    const skipBtn = overlay.querySelector(".aprova-btn-skip");
+    if (totalActions <= 1) {
+      skipBtn.disabled = true;
+    } else {
+      skipBtn.onclick = () => dismiss(false);
+    }
     overlay.querySelector(".aprova-btn-stop").onclick = () => dismiss("stop");
 
-    // Keyboard shortcuts: Enter=OK, Escape=Skip, Shift+Escape=Stop
     function onKey(e) {
       if (e.key === "Enter") { e.preventDefault(); dismiss(true); }
       else if (e.key === "Escape" && e.shiftKey) { e.preventDefault(); dismiss("stop"); }
-      else if (e.key === "Escape") { e.preventDefault(); dismiss(false); }
+      else if (e.key === "Escape" && totalActions > 1) { e.preventDefault(); dismiss(false); }
     }
     document.addEventListener("keydown", onKey);
 
-    // Highlight target element
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "center" });
       target.style.outline = "3px solid #FF9800";
@@ -250,9 +427,14 @@ function showConfirmOverlay(action) {
   });
 }
 
-async function executeAction(action, confirmMode) {
+async function executeAction(action, confirmMode, totalActions = 1) {
   if (confirmMode) {
-    const approved = await showConfirmOverlay(action);
+    let currentValue = null;
+    if (action.type === "fill_text") {
+      const el = findElement(action);
+      if (el) currentValue = el.value || "";
+    }
+    const approved = await showConfirmOverlay(action, currentValue, totalActions);
     if (approved === "stop") return { status: "stopped", action };
     if (!approved) return { status: "skipped", action };
   }
@@ -306,9 +488,13 @@ async function executeAction(action, confirmMode) {
 async function executeActions(actions, confirmMode) {
   const results = [];
   for (const action of actions) {
-    const result = await executeAction(action, confirmMode);
+    const result = await executeAction(action, confirmMode, actions.length);
     results.push(result);
-    if (result.status === "stopped") break;
+    if (result.status === "stopped") {
+      // Clean up any remaining overlays
+      document.querySelectorAll(".aprova-confirm-overlay").forEach((el) => el.remove());
+      break;
+    }
     if (result.status === "not_found") {
       // Log but continue with remaining actions
       console.warn("[Aprova.ai] Element not found:", action);

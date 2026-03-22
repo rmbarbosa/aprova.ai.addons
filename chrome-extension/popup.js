@@ -26,6 +26,7 @@ const $attachPreviewRemove = document.getElementById("attachPreviewRemove");
 
 const $timeoutSelect = document.getElementById("timeoutSelect");
 const $bridgeUrlInput = document.getElementById("bridgeUrlInput");
+const $initialPrompt = document.getElementById("initialPromptInput");
 const $sessionInfo = document.getElementById("sessionInfo");
 const $offlineBanner = document.getElementById("offlineBanner");
 
@@ -205,6 +206,23 @@ function sendToBg(msg) {
 
 let BRIDGE_URL = "http://localhost:9090";
 
+const DEFAULT_INITIAL_PROMPT = `Quando responderes com acções de preenchimento, usa exactamente este formato JSON:
+{
+  "actions": [
+    {
+      "type": "fill_text" | "select_option" | "click_radio" | "click_checkbox" | "click_button" | "wait" | "scroll_to",
+      "selector": "#fldTexto_D13_texto",
+      "id": "fldTexto_D13_texto",
+      "name": "campo1",
+      "value": "texto ou valor a preencher",
+      "description": "Descrição da acção",
+      "ms": 1000
+    }
+  ],
+  "alerts": [],
+  "answer": "resumo curto"
+}`;
+
 /**
  * Stream an /ask/stream SSE request directly from the side panel.
  * Calls onStep(text) for thinking/tool steps and onText(fullTextSoFar) for each text chunk.
@@ -310,7 +328,7 @@ $lobbyConnectBtn.addEventListener("click", async () => {
   $lobbyConnectBtn.textContent = "A iniciar sessão...";
   $status.className = "status-dot connecting";
 
-  const resp = await sendToBg({ action: "session-start", project });
+  const resp = await sendToBg({ action: "session-start", project, initialPrompt: $initialPrompt.value || "" });
 
   $lobbyConnectBtn.textContent = "Iniciar Sessão";
 
@@ -439,13 +457,19 @@ async function init() {
   // Load saved preferences (local + sync)
   const [saved, synced] = await Promise.all([
     chrome.storage.local.get(["project", "confirmMode", "timeout"]),
-    chrome.storage.sync.get(["bridgeUrl"]),
+    chrome.storage.sync.get(["bridgeUrl", "initialPrompt"]),
   ]);
   if (synced.bridgeUrl) {
     BRIDGE_URL = synced.bridgeUrl;
     $bridgeUrlInput.value = synced.bridgeUrl;
   } else {
     $bridgeUrlInput.value = BRIDGE_URL;
+  }
+  if (synced.initialPrompt !== undefined) {
+    $initialPrompt.value = synced.initialPrompt;
+  } else {
+    $initialPrompt.value = DEFAULT_INITIAL_PROMPT;
+    chrome.storage.sync.set({ initialPrompt: DEFAULT_INITIAL_PROMPT });
   }
   if (saved.timeout) $timeoutSelect.value = saved.timeout;
   if (saved.confirmMode !== undefined) $confirmMode.checked = saved.confirmMode;
@@ -699,35 +723,45 @@ async function askBoris() {
       return;
     }
 
-    // If response contains JSON actions, try to parse and execute
+    // If response contains JSON actions/alerts, parse and handle
     if (resp.answer) {
       const parsed = _tryParseActions(resp.answer);
-      if (parsed?.actions?.length > 0 && !askAborted) {
-        addMsg(`${parsed.actions.length} acções detectadas — a executar...`, "boris");
-        const execResp = await sendToBg({
-          action: "execute-actions-on-page",
-          actions: parsed.actions,
-          confirmMode: $confirmMode.checked,
-        });
-        if (execResp.results) {
-          const done = execResp.results.filter((r) => r.status === "done").length;
-          addActionCard("Acções executadas", execResp.results, `${done}/${execResp.results.length}`);
+
+      if (parsed) {
+        // Execute actions if any
+        if (parsed.actions?.length > 0 && !askAborted) {
+          addMsg(`${parsed.actions.length} acções detectadas — a executar...`, "boris");
+          const execResp = await sendToBg({
+            action: "execute-actions-on-page",
+            actions: parsed.actions,
+            confirmMode: $confirmMode.checked,
+          });
+          if (execResp.results) {
+            const done = execResp.results.filter((r) => r.status === "done").length;
+            addActionCard("Acções executadas", execResp.results, `${done}/${execResp.results.length}`);
+          }
         }
-        // Show the textual answer from the parsed JSON (not the raw JSON)
-        const displayAnswer = parsed.answer || parsed.alerts?.join("\n") || null;
+
+        // Show alerts as modal dialog
+        if (parsed.alerts?.length > 0) {
+          await showAlertModal(parsed.alerts);
+        }
+
+        // Show the textual answer (not the raw JSON)
+        const displayAnswer = parsed.answer || null;
         if (displayAnswer) {
           if (responseBubble) {
             responseBubble.innerHTML = renderMd(displayAnswer);
           } else {
             addMsg(displayAnswer, "boris");
           }
+        } else if (!responseBubble && !parsed.actions?.length && !parsed.alerts?.length) {
+          addMsg("Sem resposta", "boris");
         }
       } else {
-        // No actions — show the final answer as-is
-        if (!responseBubble && resp.answer) {
+        // Not JSON — show as plain text
+        if (!responseBubble) {
           addMsg(resp.answer, "boris");
-        } else if (!responseBubble) {
-          addMsg("Sem resposta", "boris");
         }
       }
     } else if (!responseBubble) {
@@ -831,7 +865,41 @@ $screenshotBtn.addEventListener("click", async () => {
 
 $attachPreviewRemove.addEventListener("click", clearPendingScreenshot);
 
-// Page title — insert at cursor position
+// ---------------------------------------------------------------------------
+// Alert modal — shows alerts with a single OK button
+// ---------------------------------------------------------------------------
+function showAlertModal(alerts) {
+  return new Promise((resolve) => {
+    const modal = document.createElement("div");
+    modal.className = "formdesc-modal";
+    modal.innerHTML = `
+      <div class="formdesc-modal-box" style="height:auto;max-height:70%;">
+        <div class="formdesc-modal-header" style="color:var(--warning);">\u26a0 Alertas</div>
+        <div class="formdesc-modal-body" style="flex:0 1 auto;"></div>
+        <div class="formdesc-modal-footer">
+          <button class="alert-modal-ok">OK</button>
+        </div>
+      </div>`;
+    const body = modal.querySelector(".formdesc-modal-body");
+    const ul = document.createElement("ul");
+    ul.style.cssText = "list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;";
+    for (const a of alerts) {
+      const li = document.createElement("li");
+      li.style.cssText = "color:var(--text-secondary);font-size:13px;line-height:1.5;padding:8px 12px;background:rgba(251,191,36,0.08);border-left:3px solid var(--warning);border-radius:4px;";
+      li.textContent = a;
+      ul.appendChild(li);
+    }
+    body.appendChild(ul);
+    const close = () => { modal.remove(); resolve(); };
+    modal.querySelector(".alert-modal-ok").addEventListener("click", close);
+    modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+    document.addEventListener("keydown", function onKey(e) {
+      if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); document.removeEventListener("keydown", onKey); close(); }
+    });
+    document.body.appendChild(modal);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Describe Form Structure — scan all fields + force-load select options
 // ---------------------------------------------------------------------------
@@ -967,6 +1035,10 @@ $bridgeUrlInput.addEventListener("change", () => {
   BRIDGE_URL = url;
   $bridgeUrlInput.value = url;
   chrome.storage.sync.set({ bridgeUrl: url });
+});
+
+$initialPrompt.addEventListener("change", () => {
+  chrome.storage.sync.set({ initialPrompt: $initialPrompt.value });
 });
 
 $clearChatBtn.addEventListener("click", () => {

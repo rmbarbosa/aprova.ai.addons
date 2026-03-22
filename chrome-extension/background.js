@@ -4,7 +4,19 @@
  * Author: Rui Barbosa @rmblda 2026
  */
 
-const BRIDGE_URL = "http://localhost:9090";
+let BRIDGE_URL = "http://localhost:9090";
+
+// Load saved bridge URL from storage
+chrome.storage.sync.get(["bridgeUrl"], (data) => {
+  if (data.bridgeUrl) BRIDGE_URL = data.bridgeUrl;
+});
+
+// Listen for bridge URL changes
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && changes.bridgeUrl?.newValue) {
+    BRIDGE_URL = changes.bridgeUrl.newValue;
+  }
+});
 
 // Open side panel when extension icon is clicked
 chrome.action.onClicked.addListener((tab) => {
@@ -17,7 +29,7 @@ chrome.action.onClicked.addListener((tab) => {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "scan-select-options",
-    title: "Scan Opções",
+    title: "Scan Opções Select",
     contexts: ["all"],
   });
 });
@@ -38,7 +50,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       }
       return `[${id}]: ${optionsList}`;
     });
-    const text = lines.join("\n");
+    const text = lines.join("\n") + "\n\n";
 
     // Send to side panel to insert into input box
     chrome.runtime.sendMessage({ action: "insert-field-options", text });
@@ -155,6 +167,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse(
             await bridgeRequest("/session/start", "POST", {
               project: msg.project,
+              initialPrompt: msg.initialPrompt || "",
             })
           );
           break;

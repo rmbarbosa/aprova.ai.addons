@@ -28,7 +28,9 @@
   transform: scale(1.1);
 }
 
-/* Confirm overlay — shown in confirm mode before each action */
+/* ===================================================================
+   Confirm overlay — shown in confirm mode before each action
+   =================================================================== */
 .aprova-confirm-overlay {
   position: fixed;
   top: 0;
@@ -36,14 +38,14 @@
   right: 0;
   bottom: 0;
   z-index: 100000;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding-top: 80px;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* ---- Simple (non-diff) confirm box ---- */
 .aprova-confirm-box {
   background: #1a1a2e;
   color: #e2e8f0;
@@ -54,7 +56,7 @@
   max-width: 90vw;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
   border: 1px solid rgba(74, 222, 128, 0.2);
 }
 
@@ -63,12 +65,12 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #4ade80;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   font-weight: 600;
 }
 
 .aprova-confirm-desc {
-  font-size: 14px;
+  font-size: 13px;
   margin-bottom: 12px;
   color: #cbd5e1;
   line-height: 1.4;
@@ -101,21 +103,28 @@
 .aprova-confirm-value::-webkit-scrollbar-thumb { background: #475569; border-radius: 5px; }
 .aprova-confirm-value::-webkit-scrollbar-corner { background: #0d1b2a; }
 
+/* ---- Buttons (shared by simple + diff) ---- */
 .aprova-confirm-buttons {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
+  justify-content: flex-end;
 }
 
 .aprova-btn {
-  flex: 1;
-  padding: 8px 12px;
+  padding: 7px 16px;
   border: none;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, transform 0.1s;
   font-family: system-ui, sans-serif;
+}
+
+.aprova-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 .aprova-btn:active {
@@ -147,4 +156,179 @@
 
 .aprova-btn-stop:hover {
   background: #dc2626;
+}
+
+/* ===================================================================
+   Diff confirm box — GitHub-style unified diff (dark mode)
+   =================================================================== */
+.aprova-confirm-box--diff {
+  width: 70vw;
+  max-width: 70vw;
+  height: 80vh;
+  max-height: 80vh;
+  padding: 16px 20px;
+}
+
+.aprova-confirm-top-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.aprova-confirm-top-bar .aprova-confirm-type {
+  margin-bottom: 0;
+}
+
+.aprova-confirm-top-bar .aprova-confirm-desc {
+  margin-bottom: 0;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* ---- Diff viewer (single scrollable area) ---- */
+.aprova-diff-viewer {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  background: #0d1117 !important;
+  border-radius: 8px;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  margin-bottom: 12px;
+}
+
+.aprova-diff-viewer::-webkit-scrollbar { width: 12px; height: 12px; }
+.aprova-diff-viewer::-webkit-scrollbar-track { background: #010409; border-radius: 6px; }
+.aprova-diff-viewer::-webkit-scrollbar-thumb { background: #30363d; border-radius: 6px; }
+.aprova-diff-viewer::-webkit-scrollbar-thumb:hover { background: #484f58; }
+.aprova-diff-viewer::-webkit-scrollbar-corner { background: #010409; }
+
+/* ---- Diff table ---- */
+.aprova-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  table-layout: fixed;
+  background: #0d1117 !important;
+}
+
+/* ---- Line number columns ---- */
+.aprova-diff-num {
+  width: 44px;
+  min-width: 44px;
+  padding: 0 8px !important;
+  text-align: right;
+  color: #484f58;
+  font-size: 11px;
+  user-select: none;
+  vertical-align: top;
+  border-right: 1px solid #21262d !important;
+}
+
+/* ---- Marker column (+/-) ---- */
+.aprova-diff-mark {
+  width: 20px;
+  min-width: 20px;
+  padding: 0 4px !important;
+  text-align: center;
+  font-weight: 700;
+  user-select: none;
+  vertical-align: top;
+}
+
+/* ---- Content column ---- */
+.aprova-diff-text {
+  padding: 0 12px !important;
+  white-space: pre-wrap;
+  word-break: break-word;
+  vertical-align: top;
+}
+
+/* ---- Reset host page table styles ---- */
+.aprova-diff-table,
+.aprova-diff-table thead,
+.aprova-diff-table tbody,
+.aprova-diff-table tr,
+.aprova-diff-table th,
+.aprova-diff-table td {
+  background: transparent !important;
+  border: none !important;
+  border-spacing: 0 !important;
+  color: inherit;
+  margin: 0 !important;
+  padding: 0;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* ---- Row styles by type ---- */
+
+/* Equal rows */
+.aprova-diff-row--equal {
+  color: #c9d1d9;
+  background: #0d1117 !important;
+}
+
+.aprova-diff-row--equal .aprova-diff-text {
+  color: #c9d1d9;
+}
+
+/* Removed rows — red tinted background */
+.aprova-diff-row--removed {
+  background: rgba(248, 81, 73, 0.10) !important;
+}
+
+.aprova-diff-row--removed .aprova-diff-num {
+  color: #f85149;
+  border-right-color: rgba(248, 81, 73, 0.2);
+}
+
+.aprova-diff-row--removed .aprova-diff-mark {
+  color: #f85149;
+}
+
+.aprova-diff-row--removed .aprova-diff-text {
+  color: #ffa198;
+}
+
+/* Added rows — green tinted background */
+.aprova-diff-row--added {
+  background: rgba(63, 185, 80, 0.10) !important;
+}
+
+.aprova-diff-row--added .aprova-diff-num {
+  color: #3fb950;
+  border-right-color: rgba(63, 185, 80, 0.2);
+}
+
+.aprova-diff-row--added .aprova-diff-mark {
+  color: #3fb950;
+}
+
+.aprova-diff-row--added .aprova-diff-text {
+  color: #7ee787;
+}
+
+/* ---- Word-level highlights (darker bg on changed tokens) ---- */
+.aprova-diff-row--removed .aprova-diff-hl {
+  background: rgba(248, 81, 73, 0.35);
+  border-radius: 3px;
+  padding: 1px 0;
+}
+
+.aprova-diff-row--added .aprova-diff-hl {
+  background: rgba(63, 185, 80, 0.30);
+  border-radius: 3px;
+  padding: 1px 0;
+}
+
+/* ---- Diff-mode button bar ---- */
+.aprova-confirm-box--diff .aprova-confirm-buttons {
+  padding-top: 4px;
 }
