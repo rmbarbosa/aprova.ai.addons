@@ -4,6 +4,15 @@
  * Author: Rui Barbosa @rmblda 2026
  */
 
+// Wrap everything — if extension context is dead, bail silently
+(function () {
+
+// Guard: bail out entirely if extension context is already dead (stale script)
+let _runtime;
+try { _runtime = chrome.runtime; } catch (_) { return; }
+if (!_runtime?.id) return;
+function _alive() { try { return !!_runtime?.id; } catch (_) { return false; } }
+
 // ---------------------------------------------------------------------------
 // DOM Scanning
 // ---------------------------------------------------------------------------
@@ -210,27 +219,26 @@ function showConfirmOverlay(action) {
     const valueEl = overlay.querySelector(".aprova-confirm-value");
     if (valueEl) {
       valueEl.value = action.value;
-      // Auto-size: use scrollHeight but cap at 60vh
-      valueEl.style.height = "auto";
-      const maxH = window.innerHeight * 0.6;
-      valueEl.style.height = Math.min(valueEl.scrollHeight + 4, maxH) + "px";
     }
 
-    overlay.querySelector(".aprova-btn-yes").onclick = () => {
+    function dismiss(result) {
       overlay.remove();
       if (target) target.style.outline = "";
-      resolve(true);
-    };
-    overlay.querySelector(".aprova-btn-skip").onclick = () => {
-      overlay.remove();
-      if (target) target.style.outline = "";
-      resolve(false);
-    };
-    overlay.querySelector(".aprova-btn-stop").onclick = () => {
-      overlay.remove();
-      if (target) target.style.outline = "";
-      resolve("stop");
-    };
+      document.removeEventListener("keydown", onKey);
+      resolve(result);
+    }
+
+    overlay.querySelector(".aprova-btn-yes").onclick = () => dismiss(true);
+    overlay.querySelector(".aprova-btn-skip").onclick = () => dismiss(false);
+    overlay.querySelector(".aprova-btn-stop").onclick = () => dismiss("stop");
+
+    // Keyboard shortcuts: Enter=OK, Escape=Skip, Shift+Escape=Stop
+    function onKey(e) {
+      if (e.key === "Enter") { e.preventDefault(); dismiss(true); }
+      else if (e.key === "Escape" && e.shiftKey) { e.preventDefault(); dismiss("stop"); }
+      else if (e.key === "Escape") { e.preventDefault(); dismiss(false); }
+    }
+    document.addEventListener("keydown", onKey);
 
     // Highlight target element
     if (target) {
@@ -320,11 +328,12 @@ async function executeActions(actions, confirmMode) {
 // ---------------------------------------------------------------------------
 let lastContextTarget = null;
 document.addEventListener("contextmenu", (e) => {
-  lastContextTarget = e.target;
+  if (_alive()) lastContextTarget = e.target;
 });
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+_runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
+    if (!_alive()) { sendResponse({ error: "extension context invalidated" }); return; }
     switch (msg.action) {
       case "scan-page":
         sendResponse(scanPage());
@@ -341,8 +350,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "scan-select-options": {
         // Try to find a select near the right-clicked element
         const el = lastContextTarget;
+        lastContextTarget = null;
         let selects = [];
-        const directSelect = el?.closest?.("select") || el?.querySelector?.("select");
+        let directSelect = null;
+        try { directSelect = el?.closest?.("select") || el?.querySelector?.("select"); } catch (_) {}
         if (directSelect) {
           selects = [directSelect];
         } else {
@@ -393,11 +404,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
 
+      case "describe-form-full-content":
       case "describe-form-structure": {
-        // Walk all visible form fields left-to-right (DOM order),
-        // for selects: click to trigger dynamic loading, wait, read options.
+        const _fullContent = msg.action === "describe-form-full-content";
+        // Walk form fields left-to-right (DOM order).
+        // "Validate Form Content" uses strict visibility — only truly visible fields
+        // (excludes hidden tabs, collapsed sections, display:none ancestors).
+        // "Describe Form Structure" includes anything with offsetParent (looser).
+        function _isStrictlyVisible(el) {
+          if (el.type === "hidden") return false;
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) return false;
+          let node = el;
+          while (node && node !== document.body) {
+            const style = getComputedStyle(node);
+            if (style.display === "none" || style.visibility === "hidden") return false;
+            node = node.parentElement;
+          }
+          return true;
+        }
+
         const allFields = [...document.querySelectorAll("input, textarea, select")]
-          .filter((el) => el.offsetParent !== null || el.type === "hidden");
+          .filter((el) => _isStrictlyVisible(el));
 
         const lines = [];
         lines.push(`Página: ${document.title}`);
@@ -406,22 +434,50 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (headings.length) lines.push(`Secções: ${headings.join(" > ")}`);
         lines.push("");
 
-        for (const el of allFields) {
+        // Helper: get column headers for a table
+        function getTableHeaders(table) {
+          const headerRow = table.querySelector("thead tr") || table.querySelector("tr");
+          if (!headerRow) return [];
+          return [...headerRow.children].map((th) => th.textContent.trim());
+        }
+
+        // Helper: get row number (1-based, skipping header)
+        function getRowIndex(tr) {
+          const tbody = tr.closest("tbody") || tr.closest("table");
+          const rows = [...tbody.querySelectorAll("tr")];
+          // Skip header rows
+          const dataRows = rows.filter((r) => !r.closest("thead") && r.querySelector("td"));
+          return dataRows.indexOf(tr) + 1;
+        }
+
+        // Helper: describe a single field
+        async function describeField(el, indent = "") {
           const lbl = el.id
             ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim()
             : null;
           const closestLbl = el.closest("label")?.textContent?.trim();
           const label = lbl || closestLbl || el.placeholder || el.getAttribute("aria-label") || el.name || el.id || "(sem label)";
           const req = el.required || el.getAttribute("aria-required") === "true" ? " *" : "";
+          const state = el.disabled ? " [DISABLED]" : el.readOnly ? " [READONLY]" : "";
+
+          // Column context for table fields
+          let colPrefix = "";
+          const td = el.closest("td, th");
+          if (td) {
+            const row = td.parentElement;
+            const colIdx = [...row.children].indexOf(td);
+            const table = td.closest("table");
+            const headers = table ? getTableHeaders(table) : [];
+            if (headers[colIdx]) colPrefix = `${headers[colIdx]}: `;
+          }
+
+          const fieldLines = [];
 
           if (el.tagName === "SELECT") {
-            // Force open/focus to trigger dynamic option loading
             try {
               el.focus();
               el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-              // Small wait for dynamic options to load
               await new Promise((r) => setTimeout(r, 150));
-              // Close it back
               el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
               el.blur();
             } catch (_) {}
@@ -432,31 +488,93 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               .filter((t) => t);
             const current = el.options[el.selectedIndex]?.text?.trim() || "";
             if (opts.length > 0) {
-              lines.push(`[SELECT${req}] ${label} (actual: "${current}")`);
-              lines.push(`  Opções: ${opts.join(" | ")}`);
+              fieldLines.push(`${indent}[SELECT${req}]${state} ${colPrefix}${label} (actual: "${current}")`);
+              fieldLines.push(`${indent}  Opções: ${opts.join(" | ")}`);
             } else {
-              lines.push(`[SELECT${req}] ${label} (actual: "${current}") — sem opções carregadas`);
+              fieldLines.push(`${indent}[SELECT${req}]${state} ${colPrefix}${label} (actual: "${current}") — sem opções carregadas`);
             }
           } else if (el.type === "radio") {
-            lines.push(`[RADIO${req}] ${label} — ${el.checked ? "seleccionado" : "não seleccionado"} (value: "${el.value}")`);
+            fieldLines.push(`${indent}[RADIO${req}]${state} ${colPrefix}${label} — ${el.checked ? "seleccionado" : "não seleccionado"} (value: "${el.value}")`);
           } else if (el.type === "checkbox") {
-            lines.push(`[CHECKBOX${req}] ${label} — ${el.checked ? "marcado" : "desmarcado"}`);
+            fieldLines.push(`${indent}[CHECKBOX${req}]${state} ${colPrefix}${label} — ${el.checked ? "marcado" : "desmarcado"}`);
           } else if (el.type === "hidden") {
-            // skip hidden fields in description
+            // skip
           } else if (el.tagName === "TEXTAREA") {
-            const val = el.value ? `"${el.value.substring(0, 80)}${el.value.length > 80 ? "..." : ""}"` : "(vazio)";
+            const val = el.value
+              ? (_fullContent ? `"${el.value}"` : `"${el.value.substring(0, 80)}${el.value.length > 80 ? "..." : ""}"`)
+              : "(vazio)";
             const ml = el.maxLength > 0 ? ` [max: ${el.maxLength}]` : "";
-            lines.push(`[TEXTAREA${req}] ${label}${ml} — ${val}`);
+            fieldLines.push(`${indent}[TEXTAREA${req}]${state} ${colPrefix}${label}${ml} — ${val}`);
           } else {
             const val = el.value ? `"${el.value}"` : "(vazio)";
             const ml = el.maxLength > 0 ? ` [max: ${el.maxLength}]` : "";
-            lines.push(`[${el.type.toUpperCase()}${req}] ${label}${ml} — ${val}`);
+            fieldLines.push(`${indent}[${el.type.toUpperCase()}${req}]${state} ${colPrefix}${label}${ml} — ${val}`);
           }
+          return fieldLines;
+        }
+
+        // Group fields: track which table we're inside
+        let currentTable = null;
+        let currentRow = null;
+
+        for (const el of allFields) {
+          const table = el.closest("table");
+          const tr = el.closest("tr");
+
+          if (table && table !== currentTable) {
+            // Entering a new table
+            if (currentTable) lines.push(""); // close previous table
+            currentTable = table;
+            currentRow = null;
+            // Table caption or summary
+            const caption = table.querySelector("caption")?.textContent?.trim();
+            const headers = getTableHeaders(table);
+            const tableLabel = caption || table.getAttribute("aria-label") || table.id || "";
+            lines.push(`── Tabela${tableLabel ? ": " + tableLabel : ""} ──`);
+            if (headers.length) lines.push(`  Colunas: ${headers.join(" | ")}`);
+          } else if (!table && currentTable) {
+            // Leaving a table
+            lines.push(`── Fim Tabela ──`);
+            lines.push("");
+            currentTable = null;
+            currentRow = null;
+          }
+
+          if (table && tr && tr !== currentRow) {
+            currentRow = tr;
+            const rowIdx = getRowIndex(tr);
+            // Get first cell text as row identifier if available
+            const firstCell = tr.querySelector("td");
+            const rowLabel = firstCell?.textContent?.trim()?.substring(0, 50) || "";
+            lines.push(`  Linha ${rowIdx}${rowLabel ? ": " + rowLabel : ""}`);
+          }
+
+          const indent = table ? "    " : "";
+          const fieldLines = await describeField(el, indent);
+          lines.push(...fieldLines);
+        }
+
+        if (currentTable) {
+          lines.push(`── Fim Tabela ──`);
         }
 
         sendResponse({ text: lines.join("\n"), fieldCount: allFields.length });
         break;
       }
+
+      case "ping":
+        sendResponse({ ok: true });
+        break;
+
+      case "activate-push":
+        _startPushState();
+        sendResponse({ ok: true });
+        break;
+
+      case "deactivate-push":
+        _stopPushState();
+        sendResponse({ ok: true });
+        break;
 
       default:
         sendResponse({ error: `Unknown content action: ${msg.action}` });
@@ -466,43 +584,53 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ---------------------------------------------------------------------------
-// Page load indicator
+// Push state — only activated on demand by popup/background
 // ---------------------------------------------------------------------------
 
-(function init() {
-  // Small badge to show extension is active
-  const badge = document.createElement("div");
-  badge.className = "aprova-badge";
-  badge.textContent = "A";
-  badge.title = "Aprova.ai Extension active";
-  document.body.appendChild(badge);
+let _pushHeartbeatId = null;
+let _pushTimer = null;
+let _pushObserver = null;
+let _pushActive = false;
 
-  // --- Push browser state to bridge server ---
-
-  function pushState() {
-    chrome.runtime.sendMessage({
+function _pushState() {
+  if (!_alive()) { _stopPushState(); return; }
+  try {
+    _runtime.sendMessage({
       action: "push-page-state",
       pageScan: scanPage(),
       url: location.href,
       title: document.title,
     });
-  }
+  } catch (_) { _stopPushState(); }
+}
 
-  // Push on load
-  pushState();
+function _startPushState() {
+  if (_pushActive) return;
+  _pushActive = true;
 
-  // Push on SPA navigation
-  window.addEventListener("popstate", pushState);
-  window.addEventListener("hashchange", pushState);
+  _pushState();
 
-  // Push on DOM changes (debounced 2s)
-  let pushTimer = null;
-  const observer = new MutationObserver(() => {
-    clearTimeout(pushTimer);
-    pushTimer = setTimeout(pushState, 2000);
+  window.addEventListener("popstate", _pushState);
+  window.addEventListener("hashchange", _pushState);
+
+  _pushObserver = new MutationObserver(() => {
+    clearTimeout(_pushTimer);
+    _pushTimer = setTimeout(_pushState, 2000);
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+  _pushObserver.observe(document.body, { childList: true, subtree: true });
 
-  // Heartbeat every 30s
-  setInterval(pushState, 30000);
+  _pushHeartbeatId = setInterval(_pushState, 30000);
+}
+
+function _stopPushState() {
+  if (!_pushActive) return;
+  _pushActive = false;
+
+  window.removeEventListener("popstate", _pushState);
+  window.removeEventListener("hashchange", _pushState);
+  if (_pushHeartbeatId) { clearInterval(_pushHeartbeatId); _pushHeartbeatId = null; }
+  if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
+  if (_pushObserver) { _pushObserver.disconnect(); _pushObserver = null; }
+}
+
 })();

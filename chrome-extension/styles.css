@@ -49,8 +49,11 @@
   color: #e2e8f0;
   border-radius: 12px;
   padding: 20px 24px;
+  width: 80vw;
   min-width: 320px;
-  max-width: 500px;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   border: 1px solid rgba(74, 222, 128, 0.2);
 }
@@ -74,7 +77,9 @@
 .aprova-confirm-value {
   display: block;
   width: 100%;
-  max-height: 60vh;
+  height: 50vh;
+  flex: 1 1 auto;
+  overflow-x: auto;
   overflow-y: auto;
   background: #16213e;
   border-radius: 6px;
@@ -85,16 +90,16 @@
   margin-bottom: 16px;
   border: none;
   border-left: 3px solid #4ade80;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
   line-height: 1.5;
   resize: none;
   box-sizing: border-box;
 }
 
-.aprova-confirm-value::-webkit-scrollbar { width: 6px; }
-.aprova-confirm-value::-webkit-scrollbar-track { background: #0d1b2a; border-radius: 3px; }
-.aprova-confirm-value::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+.aprova-confirm-value::-webkit-scrollbar { width: 10px; height: 10px; }
+.aprova-confirm-value::-webkit-scrollbar-track { background: #0d1b2a; border-radius: 5px; }
+.aprova-confirm-value::-webkit-scrollbar-thumb { background: #475569; border-radius: 5px; }
+.aprova-confirm-value::-webkit-scrollbar-corner { background: #0d1b2a; }
 
 .aprova-confirm-buttons {
   display: flex;

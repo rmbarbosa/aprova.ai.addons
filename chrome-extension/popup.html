@@ -313,11 +313,11 @@
       gap: 8px;
     }
 
-    .chat::-webkit-scrollbar { width: 4px; }
+    .chat::-webkit-scrollbar { width: 12px; }
     .chat::-webkit-scrollbar-track { background: transparent; }
     .chat::-webkit-scrollbar-thumb {
       background: var(--text-muted);
-      border-radius: 2px;
+      border-radius: 6px;
     }
 
     .msg {
@@ -375,7 +375,7 @@
       margin: 6px 0;
       overflow-x: auto;
     }
-    .msg.boris pre::-webkit-scrollbar { width: 6px; height: 6px; }
+    .msg.boris pre::-webkit-scrollbar { width: 10px; height: 10px; }
     .msg.boris pre::-webkit-scrollbar-track { background: #6A6A6A; border-radius: 3px; }
     .msg.boris pre::-webkit-scrollbar-thumb { background: #AEAEAE; border-radius: 3px; }
     .msg.boris pre::-webkit-scrollbar-corner { background: #6A6A6A; }
@@ -495,14 +495,89 @@
       box-shadow: 0 8px 32px rgba(0,0,0,0.5);
     }
 
+    /* Form data modal */
+    .formdesc-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      animation: fadeIn 0.15s ease;
+    }
+
+    .formdesc-modal-box {
+      width: 90%;
+      height: 70%;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+
+    .formdesc-modal-header {
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .formdesc-modal-body {
+      flex: 1 1 0;
+      overflow-y: auto;
+      padding: 10px 14px;
+      min-height: 0;
+    }
+
+    .formdesc-modal-body pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-family: var(--font-mono);
+      line-height: 1.4;
+    }
+
+    .formdesc-modal-body::-webkit-scrollbar { width: 12px; }
+    .formdesc-modal-body::-webkit-scrollbar-track { background: var(--bg-tertiary); border-radius: 6px; }
+    .formdesc-modal-body::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 6px; }
+
+    .formdesc-modal-footer {
+      padding: 8px 14px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      flex-shrink: 0;
+    }
+
+    .formdesc-modal-footer button {
+      padding: 5px 20px;
+      background: var(--accent);
+      color: var(--bg-primary);
+      border: none;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--font);
+      cursor: pointer;
+    }
+
+    .formdesc-modal-footer button:hover { background: #22c55e; }
+
     /* ---- Step / thinking messages ---- */
     .msg.step {
       align-self: flex-start;
       background: transparent;
       color: var(--text-muted);
-      font-size: 11px;
+      font-size: 9px;
       padding: 0 8px;
-      margin: -3px 0;
+      margin: -3px 0 -3px 18px;
       line-height: 1.2;
       font-family: var(--font-mono);
       animation: fadeIn 0.15s ease;
@@ -642,12 +717,14 @@
       padding: 8px 0 4px 0;
     }
 
-    .attach-preview.visible { display: block; }
+    .attach-preview.visible { display: flex; gap: 8px; align-items: flex-start; }
 
     .attach-preview-inner {
       position: relative;
       display: inline-block;
     }
+
+    .attach-preview-inner.hidden { display: none; }
 
     .attach-preview-inner img {
       width: 64px;
@@ -682,8 +759,8 @@
 
     /* Doc-style attachment thumbnail */
     .attach-preview-doc {
-      width: 64px;
-      height: 64px;
+      width: 56px;
+      height: 72px;
       border-radius: 6px;
       border: 1px solid var(--border);
       background: var(--bg-tertiary);
@@ -691,15 +768,16 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 4px;
+      gap: 6px;
+      padding: 8px 4px;
       color: var(--accent-blue);
     }
 
     .attach-preview-doc .doc-label {
-      font-size: 8px;
+      font-size: 7px;
       color: var(--text-muted);
       text-align: center;
-      line-height: 1.1;
+      line-height: 1.2;
     }
 
     /* Doc thumbnail in user chat bubble */
@@ -958,10 +1036,14 @@
   <!-- Header -->
   <div class="header">
     <div class="header-logo">A</div>
+    <span class="session-info connected-ui" id="sessionInfo" style="font-size:10px;color:var(--text-muted);font-family:var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;" title=""></span>
     <div class="header-spacer"></div>
     <button class="settings-toggle connected-ui" id="settingsToggle" title="Settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="9" cy="18" r="2" fill="currentColor"/></svg></button>
     <div class="status-dot" id="statusDot" title="Disconnected"></div>
   </div>
+
+  <!-- Bridge offline banner -->
+  <div id="offlineBanner" style="display:none;background:rgba(239,68,68,0.15);color:var(--error);text-align:center;padding:4px 8px;font-size:11px;border-bottom:1px solid rgba(239,68,68,0.3);flex-shrink:0;">Bridge offline</div>
 
   <!-- =============== LOBBY (Screen 1) =============== -->
   <div class="lobby" id="lobby">
@@ -978,12 +1060,7 @@
     <!-- Project picker -->
     <div class="lobby-subpanel visible">
       <div class="lobby-section-label">Projecto</div>
-      <select id="lobbyProjectSelect" class="lobby-select">
-        <option value="enredo-astuto-2026">enredo-astuto-2026</option>
-        <option value="oasisRiver-regua-2026">oasisRiver-regua-2026</option>
-        <option value="vilabelosj.2026.TemplosPingentes">vilabelosj.2026.TemplosPingentes</option>
-        <option value="sifide-2025-patolai">sifide-2025-patolai</option>
-      </select>
+      <select id="lobbyProjectSelect" class="lobby-select"></select>
     </div>
 
     <div class="lobby-error" id="lobbyError"></div>
@@ -1002,6 +1079,21 @@
         <span class="toggle-slider"></span>
       </label>
     </div>
+    <div class="setting-row">
+      <span>Timeout (s)</span>
+      <select id="timeoutSelect" style="background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;font-family:var(--font);">
+        <option value="0">No timeout</option>
+        <option value="60">60</option>
+        <option value="120" selected>120</option>
+        <option value="240">240</option>
+        <option value="480">480</option>
+        <option value="600">600</option>
+      </select>
+    </div>
+    <div class="setting-row">
+      <span>Bridge URL</span>
+      <input id="bridgeUrlInput" type="text" placeholder="http://localhost:9090" style="background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;font-family:var(--font-mono);width:160px;">
+    </div>
     <button class="disconnect-btn" id="clearChatBtn" style="background:rgba(96,165,250,0.1);color:var(--accent-blue);border-color:rgba(96,165,250,0.3)">Limpar Conversa</button>
     <button class="disconnect-btn" id="disconnectBtn">Desligar Sessão</button>
   </div>
@@ -1009,29 +1101,9 @@
   <!-- Project selector (scope for chat/fill/validate) -->
   <div class="project-bar connected-ui">
     <label>Projecto</label>
-    <select id="projectSelect">
-      <option value="enredo-astuto-2026">enredo-astuto-2026</option>
-      <option value="oasisRiver-regua-2026">oasisRiver-regua-2026</option>
-      <option value="vilabelosj.2026.TemplosPingentes">vilabelosj.2026.TemplosPingentes</option>
-      <option value="sifide-2025-patolai">sifide-2025-patolai</option>
-    </select>
+    <select id="projectSelect"></select>
   </div>
 
-  <!-- Action bar (no Connect button) -->
-  <div class="action-bar connected-ui">
-    <button class="action-btn" id="btnScan" title="Scan page fields">
-      <span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
-      Scan
-    </button>
-    <button class="action-btn" id="btnFill" title="Fill page fields">
-      <span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></span>
-      Fill
-    </button>
-    <button class="action-btn" id="btnValidate" title="Validate values">
-      <span class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
-      Validate
-    </button>
-  </div>
 
   <!-- Chat area -->
   <div class="chat connected-ui" id="chat">
@@ -1042,7 +1114,7 @@
   <div class="input-area connected-ui">
     <!-- Pending attachment preview -->
     <div class="attach-preview" id="attachPreview">
-      <div class="attach-preview-inner">
+      <div class="attach-preview-inner hidden">
         <img id="attachPreviewImg" src="" alt="screenshot">
         <button class="attach-preview-remove" id="attachPreviewRemove"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
@@ -1053,8 +1125,9 @@
           <button class="attach-btn" id="attachBtn" title="Anexar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
           <div class="attach-menu" id="attachMenu">
             <button class="attach-menu-item" id="screenshotBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M3 9h2M19 9h2M9 3v2M9 19v2M15 3v2M15 19v2"/></svg>Screenshot da página</button>
-            <button class="attach-menu-item" id="pageTitleBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="8" y1="20" x2="16" y2="20"/></svg>Título da página</button>
-            <button class="attach-menu-item" id="describeFormBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>Describe Form Structure</button>
+
+            <button class="attach-menu-item" id="describeFormBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>Scan Form</button>
+            <button class="attach-menu-item" id="validateFormBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg>Validate Content</button>
           </div>
         </div>
         <textarea id="askInput" placeholder="Ask Boris..." rows="1"></textarea>

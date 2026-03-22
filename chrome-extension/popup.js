@@ -12,9 +12,6 @@ const $chat = document.getElementById("chat");
 const $project = document.getElementById("projectSelect");
 const $askInput = document.getElementById("askInput");
 const $sendBtn = document.getElementById("sendBtn");
-const $btnScan = document.getElementById("btnScan");
-const $btnFill = document.getElementById("btnFill");
-const $btnValidate = document.getElementById("btnValidate");
 const $settingsToggle = document.getElementById("settingsToggle");
 const $settingsPanel = document.getElementById("settingsPanel");
 const $confirmMode = document.getElementById("confirmMode");
@@ -27,8 +24,14 @@ const $attachPreview = document.getElementById("attachPreview");
 const $attachPreviewImg = document.getElementById("attachPreviewImg");
 const $attachPreviewRemove = document.getElementById("attachPreviewRemove");
 
+const $timeoutSelect = document.getElementById("timeoutSelect");
+const $bridgeUrlInput = document.getElementById("bridgeUrlInput");
+const $sessionInfo = document.getElementById("sessionInfo");
+const $offlineBanner = document.getElementById("offlineBanner");
+
 let pendingScreenshot = null; // data URL of staged screenshot
 let pendingFormDesc = null; // staged form structure description text
+let pendingFormDescMode = "structure"; // "structure" or "validate"
 
 // Lobby refs
 const $lobby = document.getElementById("lobby");
@@ -200,7 +203,7 @@ function sendToBg(msg) {
   });
 }
 
-const BRIDGE_URL = "http://localhost:9090";
+let BRIDGE_URL = "http://localhost:9090";
 
 /**
  * Stream an /ask/stream SSE request directly from the side panel.
@@ -323,6 +326,9 @@ $lobbyConnectBtn.addEventListener("click", async () => {
   chrome.storage.local.set({ project, confirmMode: $confirmMode.checked });
 
   showScreen("connected");
+  startSessionInfo();
+  startHealthCheck();
+  activatePushOnTab();
   renderSteps(resp.steps);
   addMsg(resp.message || "Sessão ligada", "boris");
 });
@@ -330,14 +336,128 @@ $lobbyConnectBtn.addEventListener("click", async () => {
 // ---------------------------------------------------------------------------
 // Init — check bridge status, decide which screen to show
 // ---------------------------------------------------------------------------
-async function init() {
-  // Load saved preferences
-  const saved = await chrome.storage.local.get(["project", "confirmMode"]);
-  if (saved.project) {
-    $project.value = saved.project;
-    $lobbyProject.value = saved.project;
+async function fetchProjects() {
+  try {
+    const resp = await fetch(`${BRIDGE_URL}/projects`);
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return data.projects || [];
+  } catch {
+    return [];
   }
+}
+
+function populateProjectDropdowns(projects, savedProject) {
+  [$lobbyProject, $project].forEach((sel) => {
+    sel.innerHTML = "";
+    projects.forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    });
+    if (savedProject && projects.includes(savedProject)) sel.value = savedProject;
+  });
+}
+
+let _sessionStartTime = null;
+let _sessionInfoTimer = null;
+
+function updateSessionInfo() {
+  if (!_sessionStartTime) { $sessionInfo.textContent = ""; return; }
+  const elapsed = Math.floor((Date.now() - _sessionStartTime) / 1000);
+  const mins = Math.floor(elapsed / 60);
+  const proj = $project.value || "";
+  const short = proj.length > 14 ? proj.slice(0, 12) + "…" : proj;
+  $sessionInfo.textContent = `${short} ${mins}m`;
+  $sessionInfo.title = `${proj} — ${mins} min`;
+}
+
+function startSessionInfo() {
+  _sessionStartTime = Date.now();
+  updateSessionInfo();
+  clearInterval(_sessionInfoTimer);
+  _sessionInfoTimer = setInterval(updateSessionInfo, 60000);
+}
+
+function stopSessionInfo() {
+  _sessionStartTime = null;
+  clearInterval(_sessionInfoTimer);
+  $sessionInfo.textContent = "";
+}
+
+// Health check — poll /status every 30s
+let _healthTimer = null;
+function startHealthCheck() {
+  stopHealthCheck();
+  _healthTimer = setInterval(async () => {
+    try {
+      const resp = await fetch(`${BRIDGE_URL}/status`, { signal: AbortSignal.timeout(5000) });
+      const data = await resp.json();
+      if (data.status === "ok") {
+        $offlineBanner.style.display = "none";
+        $status.className = "status-dot connected";
+        // Check if our session still exists
+        const proj = $project.value;
+        if (proj && data.sessions && !data.sessions[proj]) {
+          $offlineBanner.textContent = "Sessão expirou — reconectar";
+          $offlineBanner.style.display = "block";
+        }
+      } else {
+        $offlineBanner.textContent = "Bridge offline";
+        $offlineBanner.style.display = "block";
+        $status.className = "status-dot";
+      }
+    } catch {
+      $offlineBanner.textContent = "Bridge offline";
+      $offlineBanner.style.display = "block";
+      $status.className = "status-dot";
+    }
+  }, 30000);
+}
+
+function stopHealthCheck() {
+  if (_healthTimer) { clearInterval(_healthTimer); _healthTimer = null; }
+  $offlineBanner.style.display = "none";
+}
+
+async function activatePushOnTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) chrome.tabs.sendMessage(tab.id, { action: "activate-push" }).catch(() => {});
+  } catch {}
+}
+
+async function deactivatePushOnTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) chrome.tabs.sendMessage(tab.id, { action: "deactivate-push" }).catch(() => {});
+  } catch {}
+}
+
+async function init() {
+  // Load saved preferences (local + sync)
+  const [saved, synced] = await Promise.all([
+    chrome.storage.local.get(["project", "confirmMode", "timeout"]),
+    chrome.storage.sync.get(["bridgeUrl"]),
+  ]);
+  if (synced.bridgeUrl) {
+    BRIDGE_URL = synced.bridgeUrl;
+    $bridgeUrlInput.value = synced.bridgeUrl;
+  } else {
+    $bridgeUrlInput.value = BRIDGE_URL;
+  }
+  if (saved.timeout) $timeoutSelect.value = saved.timeout;
   if (saved.confirmMode !== undefined) $confirmMode.checked = saved.confirmMode;
+
+  // Fetch projects from bridge and populate dropdowns
+  const projects = await fetchProjects();
+  if (projects.length > 0) {
+    populateProjectDropdowns(projects, saved.project);
+  } else if (saved.project) {
+    // Bridge offline — use saved project as single option
+    populateProjectDropdowns([saved.project], saved.project);
+  }
 
   // Check bridge status
   const status = await sendToBg({ action: "bridge-status" });
@@ -352,6 +472,9 @@ async function init() {
     const [proj, info] = Object.entries(status.sessions)[0];
     $project.value = proj;
     showScreen("connected");
+    startSessionInfo();
+    startHealthCheck();
+    activatePushOnTab();
     addMsg("Sessão activa — bridge ligado", "system");
     return;
   }
@@ -369,6 +492,9 @@ $disconnectBtn.addEventListener("click", async () => {
     action: "session-end",
     project: $project.value,
   });
+  stopSessionInfo();
+  stopHealthCheck();
+  deactivatePushOnTab();
   showScreen("lobby");
   $settingsPanel.classList.remove("open");
   // Refresh session list
@@ -379,126 +505,19 @@ $disconnectBtn.addEventListener("click", async () => {
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
-$btnScan.addEventListener("click", async () => {
-  const loading = addLoading("Scanning page...");
-
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) {
-    loading.remove();
-    addMsg("No active tab", "error");
-    return;
-  }
-
+async function probeContentScript() {
   try {
-    const scan = await chrome.tabs.sendMessage(tab.id, { action: "scan-page" });
-    loading.remove();
-
-    const fieldCount = scan.fields?.length || 0;
-    const filledCount = scan.fields?.filter((f) => f.currentValue).length || 0;
-    const btnCount = scan.buttons?.length || 0;
-
-    addMsg(
-      `Page: ${scan.pageContext?.title || "?"}\n` +
-        `Fields: ${fieldCount} (${filledCount} filled)\n` +
-        `Buttons: ${btnCount}\n` +
-        `Tab: ${scan.pageContext?.activeTab || "-"}`,
-      "boris"
-    );
-  } catch (err) {
-    loading.remove();
-    if (err.message.includes("Receiving end does not exist")) {
-      addMsg("Content script não carregado. Recarrega a página (F5) e tenta novamente.", "error");
-    } else {
-      addMsg(`Scan failed: ${err.message}`, "error");
-    }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) return false;
+    const resp = await Promise.race([
+      chrome.tabs.sendMessage(tab.id, { action: "ping" }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 1000)),
+    ]);
+    return resp?.ok === true;
+  } catch {
+    return false;
   }
-});
-
-// ---------------------------------------------------------------------------
-// Fill
-// ---------------------------------------------------------------------------
-$btnFill.addEventListener("click", async () => {
-  addMsg("Fill Page", "user");
-  const proc = addProcessing("A analisar formulário...");
-
-  const resp = await sendToBg({
-    action: "fill",
-    project: $project.value,
-    confirmMode: $confirmMode.checked,
-  });
-
-  proc.remove();
-  renderSteps(resp.steps);
-
-  if (resp.error) {
-    if (resp.error.includes("Receiving end does not exist")) {
-      addMsg("Content script não carregado. Recarrega a página (F5) e tenta novamente.", "error");
-    } else {
-      addMsg(`Fill failed: ${resp.error}`, "error");
-    }
-    return;
-  }
-
-  if (resp.alerts?.length) {
-    resp.alerts.forEach((a) => addMsg(`\u26a0 ${a}`, "error"));
-  }
-
-  if (resp.execution?.results) {
-    const results = resp.execution.results;
-    const done = results.filter((r) => r.status === "done").length;
-    const total = results.length;
-    addActionCard("Fill completed", results, `${done}/${total} fields`);
-  } else if (resp.actions) {
-    addMsg(`${resp.actions.length} actions ready — sending to page...`, "boris");
-    const execResp = await sendToBg({
-      action: "execute-actions-on-page",
-      actions: resp.actions,
-      confirmMode: $confirmMode.checked,
-    });
-    if (execResp.results) {
-      const done = execResp.results.filter((r) => r.status === "done").length;
-      addActionCard("Fill completed", execResp.results, `${done}/${execResp.results.length}`);
-    }
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Validate
-// ---------------------------------------------------------------------------
-$btnValidate.addEventListener("click", async () => {
-  addMsg("Validate", "user");
-  const proc = addProcessing("A validar...");
-
-  const resp = await sendToBg({
-    action: "validate",
-    project: $project.value,
-  });
-
-  proc.remove();
-  renderSteps(resp.steps);
-
-  if (resp.error) {
-    if (resp.error.includes("Receiving end does not exist")) {
-      addMsg("Content script não carregado. Recarrega a página (F5) e tenta novamente.", "error");
-    } else {
-      addMsg(`Validation failed: ${resp.error}`, "error");
-    }
-    return;
-  }
-
-  if (resp.validations) {
-    const items = resp.validations.map((v) => ({
-      status: v.status === "ok" ? "done" : v.status === "warning" ? "skipped" : "not_found",
-      description: `${v.field}: ${v.message}`,
-    }));
-    const ok = resp.validations.filter((v) => v.status === "ok").length;
-    addActionCard("Validation", items, `${ok}/${resp.validations.length} OK`);
-  }
-
-  if (resp.summary) {
-    addMsg(resp.summary, "boris");
-  }
-});
+}
 
 // ---------------------------------------------------------------------------
 // Ask Boris (smart — includes page context when relevant)
@@ -548,7 +567,9 @@ async function askBoris() {
 
   // Build the chat bubble — attachments on top, text below
   const defaultPrompt = hasFormDesc
-    ? "Estrutura do formulário em anexo. Indica a melhor opção para cada campo de selecção."
+    ? (pendingFormDescMode === "validate"
+      ? "Estrutura do formulário em anexo. Valida ou diz-me: a melhor opção para cada campo do form."
+      : "Estrutura do formulário em anexo. Valida ou diz-me: a melhor opção para cada campo de selecção.")
     : hasScreenshot
       ? "O que devo preencher nesta página?"
       : "";
@@ -603,12 +624,19 @@ async function askBoris() {
     "A pensar..."
   );
 
-  // Create an AbortController so Stop button can cancel the stream
+  // Create an AbortController so Stop button and timeout can cancel the stream
   const abortCtrl = new AbortController();
   const origAbortCheck = () => { if (askAborted) abortCtrl.abort(); };
 
+  // Timeout — read from settings (seconds → ms); 0 means no timeout
+  const timeoutSec = parseInt($timeoutSelect.value);
+  const timeoutId = timeoutSec > 0
+    ? setTimeout(() => { abortCtrl.abort(); askAborted = true; }, timeoutSec * 1000)
+    : null;
+
   // Live response bubble — updates progressively
   let responseBubble = null;
+  let lastRenderedText = "";
 
   try {
     const resp = await streamAsk(
@@ -620,7 +648,6 @@ async function askBoris() {
       },
       {
         onStep: (text) => {
-          // Show step messages above the response
           const stepDiv = document.createElement("div");
           stepDiv.className = "msg step";
           stepDiv.textContent = text;
@@ -630,19 +657,35 @@ async function askBoris() {
         onText: (fullText) => {
           proc.remove();
           origAbortCheck();
-          if (!responseBubble) {
-            responseBubble = document.createElement("div");
-            responseBubble.className = "msg boris";
-            $chat.appendChild(responseBubble);
+          // If the text looks like a JSON actions payload, skip live render —
+          // the post-stream handler will parse and execute the actions.
+          if (_tryParseActions(fullText)) {
+            lastRenderedText = fullText;
+            return;
           }
-          responseBubble.innerHTML = renderMd(fullText);
-          $chat.scrollTop = $chat.scrollHeight;
+          // Incremental render: only re-render if >50 chars changed
+          if (!responseBubble || Math.abs(fullText.length - lastRenderedText.length) > 50) {
+            if (!responseBubble) {
+              responseBubble = document.createElement("div");
+              responseBubble.className = "msg boris";
+              $chat.appendChild(responseBubble);
+            }
+            responseBubble.innerHTML = renderMd(fullText);
+            lastRenderedText = fullText;
+            $chat.scrollTop = $chat.scrollHeight;
+          }
         },
         signal: abortCtrl.signal,
       }
     );
 
+    clearTimeout(timeoutId);
     proc.remove();
+
+    // Final render with complete text
+    if (responseBubble && lastRenderedText !== (resp.answer || "")) {
+      responseBubble.innerHTML = renderMd(resp.answer || lastRenderedText);
+    }
 
     if (askAborted) {
       setAskState(false);
@@ -657,7 +700,7 @@ async function askBoris() {
     }
 
     // If response contains JSON actions, try to parse and execute
-    if (resp.answer && pageScan) {
+    if (resp.answer) {
       const parsed = _tryParseActions(resp.answer);
       if (parsed?.actions?.length > 0 && !askAborted) {
         addMsg(`${parsed.actions.length} acções detectadas — a executar...`, "boris");
@@ -670,19 +713,35 @@ async function askBoris() {
           const done = execResp.results.filter((r) => r.status === "done").length;
           addActionCard("Acções executadas", execResp.results, `${done}/${execResp.results.length}`);
         }
+        // Show the textual answer from the parsed JSON (not the raw JSON)
+        const displayAnswer = parsed.answer || parsed.alerts?.join("\n") || null;
+        if (displayAnswer) {
+          if (responseBubble) {
+            responseBubble.innerHTML = renderMd(displayAnswer);
+          } else {
+            addMsg(displayAnswer, "boris");
+          }
+        }
+      } else {
+        // No actions — show the final answer as-is
+        if (!responseBubble && resp.answer) {
+          addMsg(resp.answer, "boris");
+        } else if (!responseBubble) {
+          addMsg("Sem resposta", "boris");
+        }
       }
-    }
-
-    // If no text was streamed, show the final answer
-    if (!responseBubble && resp.answer) {
-      addMsg(resp.answer, "boris");
     } else if (!responseBubble) {
       addMsg("Sem resposta", "boris");
     }
   } catch (err) {
+    clearTimeout(timeoutId);
     proc.remove();
     if (err.name === "AbortError") {
-      addMsg("Cancelado", "system");
+      if (askAborted) {
+        addMsg("Timeout — tenta novamente", "error");
+      } else {
+        addMsg("Cancelado", "system");
+      }
     } else {
       addMsg(`Error: ${err.message}`, "error");
     }
@@ -745,8 +804,9 @@ $attachMenu.addEventListener("click", (e) => e.stopPropagation());
 // ---------------------------------------------------------------------------
 function clearPendingScreenshot() {
   pendingScreenshot = null;
-  $attachPreview.classList.remove("visible");
   $attachPreviewImg.src = "";
+  $attachPreviewImg.parentElement.classList.add("hidden");
+  if (!pendingFormDesc) $attachPreview.classList.remove("visible");
 }
 
 $screenshotBtn.addEventListener("click", async () => {
@@ -761,6 +821,7 @@ $screenshotBtn.addEventListener("click", async () => {
     // Stage the screenshot
     pendingScreenshot = capture.dataUrl;
     $attachPreviewImg.src = capture.dataUrl;
+    $attachPreviewImg.parentElement.classList.remove("hidden");
     $attachPreview.classList.add("visible");
     $askInput.focus();
   } catch (err) {
@@ -771,30 +832,32 @@ $screenshotBtn.addEventListener("click", async () => {
 $attachPreviewRemove.addEventListener("click", clearPendingScreenshot);
 
 // Page title — insert at cursor position
-document.getElementById("pageTitleBtn").addEventListener("click", async () => {
-  $attachMenu.classList.remove("open");
-  $attachBtn.classList.remove("open");
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.title) return;
-    const title = `[${tab.title}]`;
-    const pos = $askInput.selectionStart || $askInput.value.length;
-    const before = $askInput.value.substring(0, pos);
-    const after = $askInput.value.substring(pos);
-    $askInput.value = before + title + after;
-    $askInput.selectionStart = $askInput.selectionEnd = pos + title.length;
-    $askInput.dispatchEvent(new Event("input"));
-    $askInput.focus();
-  } catch (err) {
-    addMsg(`Falhou: ${err.message}`, "error");
-  }
-});
-
 // ---------------------------------------------------------------------------
 // Describe Form Structure — scan all fields + force-load select options
 // ---------------------------------------------------------------------------
+function showFormDescModal(text) {
+  if (!text) return;
+  const modal = document.createElement("div");
+  modal.className = "formdesc-modal";
+  modal.innerHTML = `
+    <div class="formdesc-modal-box">
+      <div class="formdesc-modal-header">Form Data</div>
+      <div class="formdesc-modal-body">
+        <pre></pre>
+      </div>
+      <div class="formdesc-modal-footer">
+        <button class="formdesc-modal-ok">OK</button>
+      </div>
+    </div>`;
+  modal.querySelector("pre").textContent = text;
+  modal.querySelector(".formdesc-modal-ok").addEventListener("click", () => modal.remove());
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
 function clearPendingFormDesc() {
   pendingFormDesc = null;
+  pendingFormDescMode = "structure";
   const el = document.querySelector(".attach-preview-formdesc");
   if (el) el.remove();
   if (!pendingScreenshot) $attachPreview.classList.remove("visible");
@@ -817,24 +880,63 @@ document.getElementById("describeFormBtn").addEventListener("click", async () =>
     if (!data.text) { addMsg("Nenhum campo encontrado nesta página.", "system"); return; }
 
     pendingFormDesc = data.text;
+    pendingFormDescMode = "structure";
+    _showFormDescPreview(data.fieldCount, "form structure");
+  } catch (err) {
+    loading.remove();
+    if (err.message?.includes("Receiving end does not exist")) {
+      addMsg("Content script não carregado. Recarrega a página (F5) e tenta novamente.", "error");
+    } else {
+      addMsg(`Falhou: ${err.message}`, "error");
+    }
+  }
+});
 
-    // Show doc thumbnail in preview area
-    $attachPreview.classList.add("visible");
-    const old = document.querySelector(".attach-preview-formdesc");
-    if (old) old.remove();
-    const wrapper = document.createElement("div");
-    wrapper.className = "attach-preview-inner attach-preview-formdesc";
-    wrapper.innerHTML = `
-      <div class="attach-preview-doc">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
-        <span class="doc-label">form structure<br>(${data.fieldCount} campos)</span>
-      </div>
-      <button class="attach-preview-remove formdesc-remove"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-    `;
-    wrapper.querySelector(".formdesc-remove").addEventListener("click", clearPendingFormDesc);
-    // Insert after the screenshot preview
-    $attachPreview.appendChild(wrapper);
-    $askInput.focus();
+// Helper: show form desc preview thumbnail
+function _showFormDescPreview(fieldCount, label) {
+  $attachPreview.classList.add("visible");
+  const old = document.querySelector(".attach-preview-formdesc");
+  if (old) old.remove();
+  const wrapper = document.createElement("div");
+  wrapper.className = "attach-preview-inner attach-preview-formdesc";
+  wrapper.innerHTML = `
+    <div class="attach-preview-doc">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
+      <span class="doc-label">${label}<br>(${fieldCount} campos)</span>
+    </div>
+    <button class="attach-preview-remove formdesc-remove"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+  `;
+  wrapper.querySelector(".formdesc-remove").addEventListener("click", (e) => {
+    e.stopPropagation();
+    clearPendingFormDesc();
+  });
+  wrapper.querySelector(".attach-preview-doc").addEventListener("click", () => {
+    showFormDescModal(pendingFormDesc);
+  });
+  $attachPreview.appendChild(wrapper);
+  $askInput.focus();
+}
+
+// Validate Form Content — full content, no truncation
+document.getElementById("validateFormBtn").addEventListener("click", async () => {
+  $attachMenu.classList.remove("open");
+  $attachBtn.classList.remove("open");
+  if (askRunning) return;
+
+  const loading = addLoading("A ler conteúdo completo do formulário...");
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) { loading.remove(); addMsg("No active tab", "error"); return; }
+
+    const data = await chrome.tabs.sendMessage(tab.id, { action: "describe-form-full-content" });
+    loading.remove();
+
+    if (data.error) { addMsg(`Falhou: ${data.error}`, "error"); return; }
+    if (!data.text) { addMsg("Nenhum campo encontrado nesta página.", "system"); return; }
+
+    pendingFormDesc = data.text;
+    pendingFormDescMode = "validate";
+    _showFormDescPreview(data.fieldCount, "form content");
   } catch (err) {
     loading.remove();
     if (err.message?.includes("Receiving end does not exist")) {
@@ -854,6 +956,17 @@ $settingsToggle.addEventListener("click", () => {
 
 $confirmMode.addEventListener("change", () => {
   chrome.storage.local.set({ confirmMode: $confirmMode.checked });
+});
+
+$timeoutSelect.addEventListener("change", () => {
+  chrome.storage.local.set({ timeout: $timeoutSelect.value });
+});
+
+$bridgeUrlInput.addEventListener("change", () => {
+  const url = $bridgeUrlInput.value.trim().replace(/\/+$/, "") || "http://localhost:9090";
+  BRIDGE_URL = url;
+  $bridgeUrlInput.value = url;
+  chrome.storage.sync.set({ bridgeUrl: url });
 });
 
 $clearChatBtn.addEventListener("click", () => {
