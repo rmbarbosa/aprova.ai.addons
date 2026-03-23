@@ -12,9 +12,10 @@ const $chat = document.getElementById("chat");
 const $project = document.getElementById("projectSelect");
 const $askInput = document.getElementById("askInput");
 const $sendBtn = document.getElementById("sendBtn");
+const $headerMenuBtn = document.getElementById("headerMenuBtn");
+const $headerMenu = document.getElementById("headerMenu");
 const $settingsToggle = document.getElementById("settingsToggle");
 const $settingsPanel = document.getElementById("settingsPanel");
-const $confirmMode = document.getElementById("confirmMode");
 const $disconnectBtn = document.getElementById("disconnectBtn");
 const $clearChatBtn = document.getElementById("clearChatBtn");
 const $screenshotBtn = document.getElementById("screenshotBtn");
@@ -206,22 +207,18 @@ function sendToBg(msg) {
 
 let BRIDGE_URL = "http://localhost:9090";
 
-const DEFAULT_INITIAL_PROMPT = `Quando responderes com acções de preenchimento, usa exactamente este formato JSON:
-{
-  "actions": [
-    {
-      "type": "fill_text" | "select_option" | "click_radio" | "click_checkbox" | "click_button" | "wait" | "scroll_to",
-      "selector": "#fldTexto_D13_texto",
-      "id": "fldTexto_D13_texto",
-      "name": "campo1",
-      "value": "texto ou valor a preencher",
-      "description": "Descrição da acção",
-      "ms": 1000
-    }
-  ],
-  "alerts": [],
-  "answer": "resumo curto"
-}`;
+// Default initial prompt — loaded from bundled file
+let DEFAULT_INITIAL_PROMPT = "";
+async function loadDefaultPrompt() {
+  try {
+    const url = chrome.runtime.getURL("prompts/session-init-default.md");
+    const resp = await fetch(url);
+    DEFAULT_INITIAL_PROMPT = await resp.text();
+  } catch (e) {
+    console.warn("Failed to load default prompt:", e);
+    DEFAULT_INITIAL_PROMPT = "";
+  }
+}
 
 /**
  * Stream an /ask/stream SSE request directly from the side panel.
@@ -341,7 +338,7 @@ $lobbyConnectBtn.addEventListener("click", async () => {
 
   // Success — switch to connected screen
   $project.value = project;
-  chrome.storage.local.set({ project, confirmMode: $confirmMode.checked });
+  chrome.storage.local.set({ project });
 
   showScreen("connected");
   startSessionInfo();
@@ -454,9 +451,12 @@ async function deactivatePushOnTab() {
 }
 
 async function init() {
+  // Load default prompt from bundled file
+  await loadDefaultPrompt();
+
   // Load saved preferences (local + sync)
   const [saved, synced] = await Promise.all([
-    chrome.storage.local.get(["project", "confirmMode", "timeout"]),
+    chrome.storage.local.get(["project", "timeout"]),
     chrome.storage.sync.get(["bridgeUrl", "initialPrompt"]),
   ]);
   if (synced.bridgeUrl) {
@@ -465,14 +465,12 @@ async function init() {
   } else {
     $bridgeUrlInput.value = BRIDGE_URL;
   }
-  if (synced.initialPrompt !== undefined) {
+  if (synced.initialPrompt !== undefined && synced.initialPrompt !== "") {
     $initialPrompt.value = synced.initialPrompt;
   } else {
     $initialPrompt.value = DEFAULT_INITIAL_PROMPT;
-    chrome.storage.sync.set({ initialPrompt: DEFAULT_INITIAL_PROMPT });
   }
   if (saved.timeout) $timeoutSelect.value = saved.timeout;
-  if (saved.confirmMode !== undefined) $confirmMode.checked = saved.confirmMode;
 
   // Fetch projects from bridge and populate dropdowns
   const projects = await fetchProjects();
@@ -512,6 +510,7 @@ async function init() {
 // Disconnect — return to lobby
 // ---------------------------------------------------------------------------
 $disconnectBtn.addEventListener("click", async () => {
+  $headerMenu.classList.remove("open");
   const resp = await sendToBg({
     action: "session-end",
     project: $project.value,
@@ -734,7 +733,7 @@ async function askBoris() {
           const execResp = await sendToBg({
             action: "execute-actions-on-page",
             actions: parsed.actions,
-            confirmMode: $confirmMode.checked,
+            confirmMode: true,
           });
           if (execResp.results) {
             const done = execResp.results.filter((r) => r.status === "done").length;
@@ -788,11 +787,72 @@ async function askBoris() {
 function _tryParseActions(text) {
   try {
     const obj = JSON.parse(text);
+    // Standard format: { actions: [...] }
     if (obj.actions) return obj;
+    // Bare array of actions — wrap it
+    if (Array.isArray(obj) && obj.length > 0) {
+      const normalized = _normalizeActionArray(obj);
+      if (normalized) return normalized;
+    }
   } catch (_) {}
   const m = text.match(/\{[\s\S]*"actions"[\s\S]*\}/);
   if (m) {
     try { return JSON.parse(m[0]); } catch (_) {}
+  }
+  // Try to match a bare array
+  const arrMatch = text.match(/\[[\s\S]*\]/);
+  if (arrMatch) {
+    try {
+      const arr = JSON.parse(arrMatch[0]);
+      if (Array.isArray(arr) && arr.length > 0) {
+        const normalized = _normalizeActionArray(arr);
+        if (normalized) return normalized;
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+// Convert alternative action formats into the standard { actions, alerts, answer } shape
+function _normalizeActionArray(arr) {
+  if (!arr[0].field && !arr[0].type) return null;
+
+  // Case: array of { field, action, value/old/new } — Claude's alternative format
+  if (arr[0].field) {
+    const alerts = [];
+    const actions = arr.map((item) => {
+      if (item.note) alerts.push(item.note);
+      // Use name-based lookup (findElement handles CSS.escape)
+      // Also try id for simple field names without dots
+      const selector = item.field.includes(".")
+        ? `[name="${item.field}"]`
+        : `#${item.field}, [name="${item.field}"]`;
+
+      if (item.action === "replace" && item.old != null) {
+        return {
+          type: "replace_text",
+          selector,
+          name: item.field,
+          oldValue: item.old,
+          value: item.new || item.value,
+          description: item.description || item.note || `Substituir "${(item.old || "").substring(0, 40)}" → "${(item.new || item.value || "").substring(0, 40)}"`,
+        };
+      }
+      // action: "fill" or any other — treat as fill_text
+      return {
+        type: "fill_text",
+        selector,
+        name: item.field,
+        value: item.value,
+        description: item.description || item.note || `Preencher ${item.field}`,
+      };
+    });
+    return { actions, alerts, answer: `${actions.length} acções detectadas.` };
+  }
+
+  // Case: array of standard actions (type, selector, value...)
+  if (arr[0].type && (arr[0].selector || arr[0].id || arr[0].name)) {
+    return { actions: arr, alerts: [], answer: "" };
   }
   return null;
 }
@@ -903,13 +963,14 @@ function showAlertModal(alerts) {
 // ---------------------------------------------------------------------------
 // Describe Form Structure — scan all fields + force-load select options
 // ---------------------------------------------------------------------------
-function showFormDescModal(text) {
+function showFormDescModal(text, title) {
   if (!text) return;
+  const modalTitle = title || (pendingFormDescMode === "validate" ? "Validate Form Data" : "Describe Form Data");
   const modal = document.createElement("div");
   modal.className = "formdesc-modal";
   modal.innerHTML = `
     <div class="formdesc-modal-box">
-      <div class="formdesc-modal-header">Form Data</div>
+      <div class="formdesc-modal-header">${modalTitle}</div>
       <div class="formdesc-modal-body">
         <pre></pre>
       </div>
@@ -949,7 +1010,7 @@ document.getElementById("describeFormBtn").addEventListener("click", async () =>
 
     pendingFormDesc = data.text;
     pendingFormDescMode = "structure";
-    _showFormDescPreview(data.fieldCount, "form structure");
+    _showFormDescPreview(data.fieldCount, "Describe Form Data");
   } catch (err) {
     loading.remove();
     if (err.message?.includes("Receiving end does not exist")) {
@@ -1004,7 +1065,7 @@ document.getElementById("validateFormBtn").addEventListener("click", async () =>
 
     pendingFormDesc = data.text;
     pendingFormDescMode = "validate";
-    _showFormDescPreview(data.fieldCount, "form content");
+    _showFormDescPreview(data.fieldCount, "Validate Form Data");
   } catch (err) {
     loading.remove();
     if (err.message?.includes("Receiving end does not exist")) {
@@ -1016,33 +1077,109 @@ document.getElementById("validateFormBtn").addEventListener("click", async () =>
 });
 
 // ---------------------------------------------------------------------------
-// Settings toggle
+// Header menu ("..." button)
 // ---------------------------------------------------------------------------
-$settingsToggle.addEventListener("click", () => {
-  $settingsPanel.classList.toggle("open");
+$headerMenuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  $headerMenu.classList.toggle("open");
 });
 
-$confirmMode.addEventListener("change", () => {
-  chrome.storage.local.set({ confirmMode: $confirmMode.checked });
+// Close menu on outside click
+document.addEventListener("click", (e) => {
+  if (!$headerMenu.contains(e.target) && e.target !== $headerMenuBtn) {
+    $headerMenu.classList.remove("open");
+  }
 });
 
-$timeoutSelect.addEventListener("change", () => {
-  chrome.storage.local.set({ timeout: $timeoutSelect.value });
-});
+// Snapshot of settings values before editing (for cancel)
+let _settingsSnapshot = {};
 
-$bridgeUrlInput.addEventListener("change", () => {
+function openSettings() {
+  $headerMenu.classList.remove("open");
+  // Snapshot current values
+  _settingsSnapshot = {
+    timeout: $timeoutSelect.value,
+    bridgeUrl: $bridgeUrlInput.value,
+    initialPrompt: $initialPrompt.value,
+  };
+  document.getElementById("settingsBackdrop").classList.add("open");
+  $settingsPanel.classList.add("open");
+}
+
+function closeSettings() {
+  document.getElementById("settingsBackdrop").classList.remove("open");
+  $settingsPanel.classList.remove("open");
+}
+
+$settingsToggle.addEventListener("click", openSettings);
+document.getElementById("settingsCloseBtn").addEventListener("click", () => {
+  // Cancel — restore snapshot
+  $timeoutSelect.value = _settingsSnapshot.timeout;
+  $bridgeUrlInput.value = _settingsSnapshot.bridgeUrl;
+  $initialPrompt.value = _settingsSnapshot.initialPrompt;
+  closeSettings();
+});
+document.getElementById("settingsBackdrop").addEventListener("click", () => {
+  // Cancel on backdrop click
+  $timeoutSelect.value = _settingsSnapshot.timeout;
+  $bridgeUrlInput.value = _settingsSnapshot.bridgeUrl;
+  $initialPrompt.value = _settingsSnapshot.initialPrompt;
+  closeSettings();
+});
+document.getElementById("settingsCancelBtn").addEventListener("click", () => {
+  $timeoutSelect.value = _settingsSnapshot.timeout;
+  $bridgeUrlInput.value = _settingsSnapshot.bridgeUrl;
+  $initialPrompt.value = _settingsSnapshot.initialPrompt;
+  closeSettings();
+});
+document.getElementById("settingsSaveBtn").addEventListener("click", () => {
+  // Save all settings
   const url = $bridgeUrlInput.value.trim().replace(/\/+$/, "") || "http://localhost:9090";
   BRIDGE_URL = url;
   $bridgeUrlInput.value = url;
-  chrome.storage.sync.set({ bridgeUrl: url });
+  chrome.storage.local.set({ timeout: $timeoutSelect.value });
+  chrome.storage.sync.set({ bridgeUrl: url, initialPrompt: $initialPrompt.value });
+  closeSettings();
 });
 
-$initialPrompt.addEventListener("change", () => {
-  chrome.storage.sync.set({ initialPrompt: $initialPrompt.value });
+// Prompt context menu
+const $promptMenu = document.getElementById("promptMenu");
+document.getElementById("promptMenuBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $promptMenu.classList.toggle("open");
+});
+document.addEventListener("click", (e) => {
+  if (!$promptMenu.contains(e.target)) $promptMenu.classList.remove("open");
+});
+document.getElementById("promptCopyBtn").addEventListener("click", () => {
+  navigator.clipboard.writeText($initialPrompt.value);
+  $promptMenu.classList.remove("open");
+});
+document.getElementById("promptPasteBtn").addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    $initialPrompt.value = text;
+  } catch (_) {}
+  $promptMenu.classList.remove("open");
+});
+document.getElementById("promptRestoreBtn").addEventListener("click", () => {
+  $initialPrompt.value = DEFAULT_INITIAL_PROMPT;
+  $promptMenu.classList.remove("open");
 });
 
 $clearChatBtn.addEventListener("click", () => {
+  $headerMenu.classList.remove("open");
   $chat.innerHTML = '<div class="msg system">Conversa limpa</div>';
+});
+
+// Settings tabs
+document.querySelectorAll(".settings-tab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".settings-tab").forEach((t) => t.classList.remove("active"));
+    document.querySelectorAll(".settings-tab-content").forEach((c) => c.classList.remove("active"));
+    tab.classList.add("active");
+    document.querySelector(`[data-tab-content="${tab.dataset.tab}"]`).classList.add("active");
+  });
 });
 
 // Copy button on code blocks + screenshot expand

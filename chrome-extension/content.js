@@ -149,15 +149,37 @@ function findElement(action) {
       // Invalid selector, fall through
     }
   }
-  // Try by id
+  // Try by id (exact)
   if (action.id) {
     const el = document.getElementById(action.id);
     if (el) return el;
   }
-  // Try by name
+  // Try by name (exact)
   if (action.name) {
-    const el = document.querySelector(`[name="${CSS.escape(action.name)}"]`);
-    if (el) return el;
+    try {
+      const el = document.querySelector(`[name="${CSS.escape(action.name)}"]`);
+      if (el) return el;
+    } catch (_) {}
+  }
+  // Try name/id as a flexible lookup — handles dotted field names from Claude
+  const fieldName = action.name || action.id || "";
+  if (fieldName) {
+    // Try id directly (getElementById handles dots naturally)
+    const byId = document.getElementById(fieldName);
+    if (byId) return byId;
+    // Try name attribute without CSS.escape (some pages use dots in name)
+    try {
+      const byName = document.querySelector(`[name="${fieldName}"]`);
+      if (byName) return byName;
+    } catch (_) {}
+    // Try partial match on id/name ending (e.g., "tbTexto3" matches "#prefix_tbTexto3")
+    const lastPart = fieldName.includes(".") ? fieldName.split(".").pop() : "";
+    if (lastPart) {
+      const byPartialId = document.querySelector(`[id$="${CSS.escape(lastPart)}"]`);
+      if (byPartialId) return byPartialId;
+      const byPartialName = document.querySelector(`[name$="${CSS.escape(lastPart)}"]`);
+      if (byPartialName) return byPartialName;
+    }
   }
   return null;
 }
@@ -166,9 +188,108 @@ function findElement(action) {
 // Action execution
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Robust text replacement — tries multiple strategies to find and replace
+// Returns { result: string, success: bool, strategy: string }
+// ---------------------------------------------------------------------------
+function robustReplace(fieldValue, searchText, replaceText) {
+  if (!searchText) return { result: fieldValue, success: false, strategy: "empty" };
+
+  // Strategy 1: Exact match
+  if (fieldValue.includes(searchText)) {
+    return { result: fieldValue.replace(searchText, replaceText), success: true, strategy: "exact" };
+  }
+
+  // Strategy 2: Decode HTML entities in search text
+  const decoded = searchText
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+  if (decoded !== searchText && fieldValue.includes(decoded)) {
+    return { result: fieldValue.replace(decoded, replaceText), success: true, strategy: "html-decode" };
+  }
+
+  // Strategy 3: Normalize unicode quotes/dashes in both
+  const normalizeChars = (s) => s
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\u00A0/g, " ");
+  const normSearch = normalizeChars(decoded);
+  const normField = normalizeChars(fieldValue);
+  if (normField.includes(normSearch)) {
+    const idx = normField.indexOf(normSearch);
+    return {
+      result: fieldValue.substring(0, idx) + replaceText + fieldValue.substring(idx + normSearch.length),
+      success: true,
+      strategy: "unicode-normalize",
+    };
+  }
+
+  // Strategy 4: Collapse whitespace (spaces, tabs, newlines → single space)
+  const collapseWS = (s) => normalizeChars(s).replace(/\s+/g, " ").trim();
+  const wsSearch = collapseWS(decoded);
+  const wsField = collapseWS(fieldValue);
+  if (wsField.includes(wsSearch)) {
+    // Map collapsed positions back to original
+    const idx = wsField.indexOf(wsSearch);
+    let origStart = -1, origEnd = -1;
+    let collapsed = 0, inWS = false;
+    for (let i = 0; i < fieldValue.length; i++) {
+      const ch = fieldValue[i];
+      const isWS = /\s/.test(ch);
+      if (isWS && inWS) continue; // skip consecutive whitespace
+      if (collapsed === idx && origStart === -1) origStart = i;
+      if (collapsed === idx + wsSearch.length) { origEnd = i; break; }
+      collapsed++;
+      inWS = isWS;
+    }
+    if (origStart >= 0) {
+      if (origEnd < 0) origEnd = fieldValue.length;
+      return {
+        result: fieldValue.substring(0, origStart) + replaceText + fieldValue.substring(origEnd),
+        success: true,
+        strategy: "whitespace-collapse",
+      };
+    }
+  }
+
+  // Strategy 5: Case-insensitive match
+  const escRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const ciRegex = new RegExp(escRegex(wsSearch), "i");
+  const ciMatch = wsField.match(ciRegex);
+  if (ciMatch) {
+    // Find in original using same collapsed mapping
+    const ciFieldRegex = new RegExp(escRegex(collapseWS(decoded)), "i");
+    const origMatch = collapseWS(fieldValue).match(ciFieldRegex);
+    if (origMatch) {
+      const idx = origMatch.index;
+      let origStart = -1, origEnd = -1, collapsed = 0, inWS = false;
+      for (let i = 0; i < fieldValue.length; i++) {
+        const isWS = /\s/.test(fieldValue[i]);
+        if (isWS && inWS) continue;
+        if (collapsed === idx && origStart === -1) origStart = i;
+        if (collapsed === idx + origMatch[0].length) { origEnd = i; break; }
+        collapsed++;
+        inWS = isWS;
+      }
+      if (origStart >= 0) {
+        if (origEnd < 0) origEnd = fieldValue.length;
+        return {
+          result: fieldValue.substring(0, origStart) + replaceText + fieldValue.substring(origEnd),
+          success: true,
+          strategy: "case-insensitive",
+        };
+      }
+    }
+  }
+
+  return { result: fieldValue, success: false, strategy: "none" };
+}
+
 function highlightElement(el, actionType) {
   const colors = {
     fill_text: "#4CAF50",
+    replace_text: "#4CAF50",
     select_option: "#2196F3",
     click_radio: "#FF9800",
     click_checkbox: "#FF9800",
@@ -300,6 +421,7 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
 
     const labels = {
       fill_text: "Preencher texto",
+      replace_text: "Substituir texto",
       select_option: "Seleccionar opção",
       click_radio: "Seleccionar radio",
       click_checkbox: "Marcar checkbox",
@@ -309,7 +431,7 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
     };
 
     const target = findElement(action);
-    const useDiff = action.type === "fill_text" && currentValue != null && currentValue.length > 0;
+    const useDiff = (action.type === "fill_text" || action.type === "replace_text") && currentValue != null && currentValue.length > 0;
 
     if (useDiff) {
       // ── GitHub-style unified diff with word-level highlights ──
@@ -323,13 +445,19 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
             <table class="aprova-diff-table"><tbody></tbody></table>
           </div>
           <div class="aprova-confirm-buttons">
-            <button class="aprova-btn aprova-btn-stop">Abortar</button>
-            <button class="aprova-btn aprova-btn-skip">Saltar Próximo</button>
-            <button class="aprova-btn aprova-btn-yes">Aplicar</button>
+            <button class="aprova-btn aprova-btn-stop">Parar Todas</button>
+            <button class="aprova-btn aprova-btn-skip">Não Aplicar e Continuar</button>
+            <button class="aprova-btn aprova-btn-yes">Aplicar e Continuar</button>
           </div>
         </div>`;
 
-      const entries = computeDiffModel(currentValue, action.value);
+      // For replace_text, compute the full result text with the replacement applied
+      let newValue = action.value;
+      if (action.type === "replace_text" && action.oldValue) {
+        const rr = robustReplace(currentValue, action.oldValue, action.value);
+        newValue = rr.success ? rr.result : currentValue;
+      }
+      const entries = computeDiffModel(currentValue, newValue);
       const tbody = overlay.querySelector(".aprova-diff-table tbody");
 
       for (const entry of entries) {
@@ -383,9 +511,9 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
           <div class="aprova-confirm-desc">${action.description || action.selector || ""}</div>
           ${action.value ? '<textarea class="aprova-confirm-value" readonly></textarea>' : ""}
           <div class="aprova-confirm-buttons">
-            <button class="aprova-btn aprova-btn-stop">Abortar</button>
-            <button class="aprova-btn aprova-btn-skip">Saltar Próximo</button>
-            <button class="aprova-btn aprova-btn-yes">Aplicar</button>
+            <button class="aprova-btn aprova-btn-stop">Parar Todas</button>
+            <button class="aprova-btn aprova-btn-skip">Não Aplicar e Continuar</button>
+            <button class="aprova-btn aprova-btn-yes">Aplicar e Continuar</button>
           </div>
         </div>`;
 
@@ -430,7 +558,7 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
 async function executeAction(action, confirmMode, totalActions = 1) {
   if (confirmMode) {
     let currentValue = null;
-    if (action.type === "fill_text") {
+    if (action.type === "fill_text" || action.type === "replace_text") {
       const el = findElement(action);
       if (el) currentValue = el.value || "";
     }
@@ -455,28 +583,145 @@ async function executeAction(action, confirmMode, totalActions = 1) {
 
   switch (action.type) {
     case "fill_text": {
-      // Focus, clear, set value, dispatch events
+      // Strategy 1: Direct value + events (works for most inputs/textareas)
       el.focus();
-      el.value = action.value;
+      try {
+        // Use native setter to bypass React/Angular controlled inputs
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          Object.getPrototypeOf(el), "value"
+        )?.set || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set
+          || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+        if (nativeSetter) {
+          nativeSetter.call(el, action.value);
+        } else {
+          el.value = action.value;
+        }
+      } catch (_) {
+        el.value = action.value;
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+      // Strategy 2: Verify — if value didn't stick, try setAttribute
+      if (el.value !== action.value) {
+        el.setAttribute("value", action.value);
+        el.value = action.value;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      break;
+    }
+    case "replace_text": {
+      el.focus();
+      const rr = robustReplace(el.value, action.oldValue, action.value);
+      if (!rr.success) {
+        highlightElement(el, action.type);
+        return { status: "skipped", action, reason: `Texto "${(action.oldValue || "").substring(0, 60)}" não encontrado no campo` };
+      }
+      try {
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          Object.getPrototypeOf(el), "value"
+        )?.set || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+        if (nativeSetter) nativeSetter.call(el, rr.result);
+        else el.value = rr.result;
+      } catch (_) {
+        el.value = rr.result;
+      }
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
       el.dispatchEvent(new Event("blur", { bubbles: true }));
       break;
     }
     case "select_option": {
-      el.value = action.value;
+      const val = action.value;
+      // Strategy 1: Exact value match
+      if ([...el.options].some((o) => o.value === val)) {
+        el.value = val;
+      }
+      // Strategy 2: Case-insensitive value match
+      else {
+        const match = [...el.options].find((o) =>
+          o.value.toLowerCase() === val.toLowerCase()
+        );
+        if (match) {
+          el.value = match.value;
+        }
+        // Strategy 3: Match by option text (label)
+        else {
+          const textMatch = [...el.options].find((o) =>
+            o.text.trim().toLowerCase() === val.toLowerCase()
+          );
+          if (textMatch) {
+            el.value = textMatch.value;
+          }
+          // Strategy 4: Partial text match on label
+          else {
+            const partialMatch = [...el.options].find((o) =>
+              o.text.trim().toLowerCase().includes(val.toLowerCase()) ||
+              val.toLowerCase().includes(o.text.trim().toLowerCase())
+            );
+            if (partialMatch) {
+              el.value = partialMatch.value;
+            } else {
+              // No match found — set value anyway (may not work but triggers change)
+              el.value = val;
+            }
+          }
+        }
+      }
       el.dispatchEvent(new Event("change", { bubbles: true }));
+      // Some frameworks need a second pass
+      if (el.value !== val && el.value !== el.options[el.selectedIndex]?.value) {
+        el.selectedIndex = [...el.options].findIndex((o) =>
+          o.value === el.value || o.text.trim().toLowerCase() === val.toLowerCase()
+        );
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       break;
     }
     case "click_radio":
     case "click_checkbox": {
-      el.checked = action.value !== false && action.value !== "false";
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      el.click();
+      const shouldCheck = action.value !== false && action.value !== "false" && action.value !== "0";
+      // Strategy 1: Set checked + click + events
+      if (el.checked !== shouldCheck) {
+        el.checked = shouldCheck;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.click();
+      }
+      // Strategy 2: If still not set, try direct click (toggles checkbox)
+      if (el.checked !== shouldCheck) {
+        el.click();
+      }
+      // Strategy 3: Force via native setter
+      if (el.checked !== shouldCheck) {
+        try {
+          const nativeSetter = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype, "checked"
+          )?.set;
+          if (nativeSetter) {
+            nativeSetter.call(el, shouldCheck);
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        } catch (_) {}
+      }
       break;
     }
     case "click_button": {
+      // Strategy 1: Direct click
       el.click();
+      // Strategy 2: If it's a link, also try triggering navigation
+      if (el.tagName === "A" && el.href && !el.onclick) {
+        // click() should handle it, but dispatch MouseEvent as backup
+        el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      }
+      // Strategy 3: Dispatch pointer + mouse events for frameworks that listen to those
+      if (el.tagName === "BUTTON" || el.getAttribute("role") === "button") {
+        el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+        el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      }
       break;
     }
   }
