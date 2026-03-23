@@ -4,6 +4,9 @@
  * Author: Rui Barbosa @rmblda 2026
  */
 
+// Load RPA module (isolated — remove this line to disable RPA)
+importScripts("rpa.js");
+
 let BRIDGE_URL = "http://localhost:9090";
 
 // Load saved bridge URL from storage
@@ -209,6 +212,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const result = await bridgeRequest("/fill", "POST", {
             project: msg.project,
             pageScan,
+            permissions: msg.permissions,
           });
 
           // If we have actions, send them to content script for execution
@@ -243,6 +247,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           };
           if (msg.pageScan) askBody.pageScan = msg.pageScan;
           if (msg.screenshot) askBody.screenshot = msg.screenshot;
+          if (msg.permissions) askBody.permissions = msg.permissions;
           sendResponse(await bridgeRequest("/ask", "POST", askBody));
           break;
         }
@@ -263,6 +268,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             await bridgeRequest("/validate", "POST", {
               project: msg.project,
               pageScan: vScan,
+              permissions: msg.permissions,
             })
           );
           break;
@@ -298,6 +304,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           );
           break;
         }
+
+        // RPA module message routing
+        case "rpa-record-start":
+          sendResponse(await RPA.startRecording());
+          break;
+        case "rpa-record-stop":
+          sendResponse(await RPA.stopRecording());
+          break;
+        case "rpa-record-status":
+          sendResponse({ recording: RPA.isRecording(), captures: RPA.getCaptures() });
+          break;
+        case "rpa-save-template":
+          sendResponse(await bridgeRequest("/template/save", "POST", {
+            project: msg.project,
+            template: msg.template,
+          }));
+          break;
+        case "rpa-load-template":
+          sendResponse(await bridgeRequest(`/template/load?project=${encodeURIComponent(msg.project)}`));
+          break;
 
         default:
           sendResponse({ error: `Unknown action: ${msg.action}` });

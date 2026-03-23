@@ -1,0 +1,267 @@
+/* Aprova.ai Extension — RPA Styles (isolated module) */
+
+/* ---- Recording banner ---- */
+.rpa-banner {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: rgba(239, 68, 68, 0.12);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.25);
+  flex-shrink: 0;
+  animation: rpaPulse 2s ease-in-out infinite;
+}
+
+@keyframes rpaPulse {
+  0%, 100% { background: rgba(239, 68, 68, 0.12); }
+  50% { background: rgba(239, 68, 68, 0.18); }
+}
+
+.rpa-banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: rpaDotBlink 1s ease-in-out infinite;
+}
+
+@keyframes rpaDotBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.rpa-banner-text {
+  flex: 1;
+  font-size: 11px;
+  color: #fca5a5;
+}
+
+.rpa-banner-stop {
+  padding: 3px 10px;
+  background: #ef4444;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: background 0.15s;
+}
+
+.rpa-banner-stop:hover { background: #dc2626; }
+
+/* ---- Template review panel (floating overlay) ---- */
+.rpa-backdrop {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 299;
+}
+
+.rpa-backdrop.open { display: block; }
+
+.rpa-panel {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 94%;
+  height: 80%;
+  z-index: 300;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.rpa-panel.open { display: flex; }
+
+/* Header */
+.rpa-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.rpa-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.rpa-panel-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.rpa-panel-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+/* Tabs */
+.rpa-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.rpa-tab {
+  flex: 1;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  transition: all 0.15s;
+}
+
+.rpa-tab:hover { color: var(--text-secondary); }
+.rpa-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Tab content */
+.rpa-tab-content {
+  display: none;
+  flex: 1 1 auto;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.rpa-tab-content.active { display: flex; flex-direction: column; }
+
+/* ---- Sections tab ---- */
+.rpa-section-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px 14px;
+}
+
+.rpa-section-list::-webkit-scrollbar { width: 10px; }
+.rpa-section-list::-webkit-scrollbar-track { background: var(--bg-tertiary); border-radius: 5px; }
+.rpa-section-list::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 5px; }
+
+.rpa-section-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+  font-size: 12px;
+}
+
+.rpa-section-row:hover { background: rgba(255, 255, 255, 0.03); }
+
+.rpa-section-check {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.rpa-section-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.rpa-section-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* ---- Template tab ---- */
+.rpa-template-textarea {
+  flex: 1 1 auto;
+  margin: 8px 14px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  line-height: 1.4;
+  resize: none;
+  min-height: 0;
+}
+
+.rpa-template-textarea:focus { outline: none; border-color: var(--accent); }
+
+.rpa-template-textarea::-webkit-scrollbar { width: 10px; }
+.rpa-template-textarea::-webkit-scrollbar-track { background: #1e293b; border-radius: 5px; }
+.rpa-template-textarea::-webkit-scrollbar-thumb { background: #475569; border-radius: 5px; }
+
+/* ---- Footer ---- */
+.rpa-panel-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.rpa-panel-footer-spacer { flex: 1; }
+
+.rpa-footer-btn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.rpa-btn-copy,
+.rpa-btn-download {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.rpa-btn-copy:hover,
+.rpa-btn-download:hover { background: rgba(255, 255, 255, 0.08); }
+
+.rpa-btn-cancel {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.rpa-btn-cancel:hover { background: rgba(255, 255, 255, 0.08); }
+
+.rpa-btn-bridge {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.rpa-btn-bridge:hover { background: rgba(74, 222, 128, 0.25); }
+
+.rpa-btn-submit {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+.rpa-btn-submit:hover { background: #22c55e; }

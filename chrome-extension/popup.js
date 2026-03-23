@@ -27,6 +27,7 @@ const $attachPreviewRemove = document.getElementById("attachPreviewRemove");
 
 const $timeoutSelect = document.getElementById("timeoutSelect");
 const $bridgeUrlInput = document.getElementById("bridgeUrlInput");
+const $permissionsSelect = document.getElementById("permissionsSelect");
 const $initialPrompt = document.getElementById("initialPromptInput");
 const $sessionInfo = document.getElementById("sessionInfo");
 const $offlineBanner = document.getElementById("offlineBanner");
@@ -179,6 +180,87 @@ function addProcessing(text = "A processar...") {
   $chat.appendChild(div);
   $chat.scrollTop = $chat.scrollHeight;
   return div;
+}
+
+// ---------------------------------------------------------------------------
+// Processing status bar (above input) — Claude Code style
+// ---------------------------------------------------------------------------
+const FUN_VERBS = [
+  "Befuddling", "Cogitating", "Ruminating", "Percolating", "Concocting",
+  "Deliberating", "Pondering", "Marinating", "Fermenting", "Brewing",
+  "Distilling", "Simmering", "Decanting", "Crystallizing", "Alchemizing",
+  "Contemplating", "Unraveling", "Synthesizing", "Extrapolating", "Meditating",
+];
+
+let _procBarElapsedInterval = null;
+let _procBarStartTime = null;
+let _procBarVerb = "";
+let _procBarStepTimeout = null;
+
+function _formatElapsed(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function _randomVerb() {
+  return FUN_VERBS[Math.floor(Math.random() * FUN_VERBS.length)];
+}
+
+function startProcessingBar() {
+  const bar = document.getElementById("processingBar");
+  const verbEl = document.getElementById("processingVerb");
+  const elapsedEl = document.getElementById("processingElapsed");
+  const stepEl = document.getElementById("processingStep");
+  if (!bar) return;
+
+  _procBarStartTime = Date.now();
+  _procBarVerb = _randomVerb();
+  verbEl.textContent = _procBarVerb;
+  elapsedEl.textContent = "(0s)";
+  stepEl.textContent = "";
+  bar.classList.add("active");
+  bar.classList.remove("done");
+
+  // Update elapsed every second
+  _procBarElapsedInterval = setInterval(() => {
+    elapsedEl.textContent = `(${_formatElapsed(Date.now() - _procBarStartTime)})`;
+  }, 1000);
+}
+
+function updateProcessingStep(stepText) {
+  const verbEl = document.getElementById("processingVerb");
+  const stepEl = document.getElementById("processingStep");
+  if (!stepEl || !verbEl) return;
+
+  // Show tool step in the step area
+  stepEl.textContent = stepText;
+}
+
+function stopProcessingBar() {
+  const bar = document.getElementById("processingBar");
+  const verbEl = document.getElementById("processingVerb");
+  const elapsedEl = document.getElementById("processingElapsed");
+  const stepEl = document.getElementById("processingStep");
+
+  clearInterval(_procBarElapsedInterval);
+  clearTimeout(_procBarStepTimeout);
+  _procBarElapsedInterval = null;
+  _procBarStepTimeout = null;
+
+  if (!bar) return;
+
+  // Show final state
+  const elapsed = _formatElapsed(Date.now() - _procBarStartTime);
+  verbEl.textContent = _procBarVerb;
+  elapsedEl.textContent = `(${elapsed})`;
+  stepEl.textContent = "";
+  bar.classList.add("done");
+
+  // Hide after 4 seconds
+  setTimeout(() => {
+    bar.classList.remove("active", "done");
+  }, 4000);
 }
 
 function renderSteps(steps) {
@@ -345,7 +427,18 @@ $lobbyConnectBtn.addEventListener("click", async () => {
   startHealthCheck();
   activatePushOnTab();
   renderSteps(resp.steps);
-  addMsg(resp.message || "Sessão ligada", "boris");
+
+  // Parse session init response — may contain JSON with actions/alerts/answer
+  const initMsg = resp.message || "Sessão ligada";
+  const initParsed = _tryParseActions(initMsg);
+  if (initParsed) {
+    if (initParsed.alerts?.length > 0) {
+      showAlertModal(initParsed.alerts);
+    }
+    addMsg(initParsed.answer || "Sessão ligada", "boris");
+  } else {
+    addMsg(initMsg, "boris");
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -457,7 +550,7 @@ async function init() {
   // Load saved preferences (local + sync)
   const [saved, synced] = await Promise.all([
     chrome.storage.local.get(["project", "timeout"]),
-    chrome.storage.sync.get(["bridgeUrl", "initialPrompt"]),
+    chrome.storage.sync.get(["bridgeUrl", "initialPrompt", "permissions"]),
   ]);
   if (synced.bridgeUrl) {
     BRIDGE_URL = synced.bridgeUrl;
@@ -471,6 +564,7 @@ async function init() {
     $initialPrompt.value = DEFAULT_INITIAL_PROMPT;
   }
   if (saved.timeout) $timeoutSelect.value = saved.timeout;
+  if (synced.permissions) $permissionsSelect.value = synced.permissions;
 
   // Fetch projects from bridge and populate dropdowns
   const projects = await fetchProjects();
@@ -623,6 +717,7 @@ async function askBoris() {
   resetAskInput();
   askAborted = false;
   setAskState(true);
+  startProcessingBar();
 
   // Attach page scan when relevant or when screenshot/formDesc is present
   const isPageRelated = FILL_KEYWORDS.test(msgText) || screenshotData || formDescData;
@@ -632,7 +727,7 @@ async function askBoris() {
     const scanLoading = addLoading("A ler a página...");
     pageScan = await tryGetPageScan();
     scanLoading.remove();
-    if (askAborted) { setAskState(false); addMsg("Cancelado", "system"); return; }
+    if (askAborted) { setAskState(false); stopProcessingBar(); addMsg("Cancelado", "system"); return; }
   }
 
   // Append form description to question if attached
@@ -668,6 +763,7 @@ async function askBoris() {
         question: fullQuestion,
         pageScan,
         screenshot: screenshotData || undefined,
+        permissions: $permissionsSelect.value,
       },
       {
         onStep: (text) => {
@@ -676,6 +772,7 @@ async function askBoris() {
           stepDiv.textContent = text;
           $chat.appendChild(stepDiv);
           $chat.scrollTop = $chat.scrollHeight;
+          updateProcessingStep(text);
         },
         onText: (fullText) => {
           proc.remove();
@@ -711,6 +808,7 @@ async function askBoris() {
     }
 
     if (askAborted) {
+      stopProcessingBar();
       setAskState(false);
       addMsg("Cancelado", "system");
       return;
@@ -718,6 +816,7 @@ async function askBoris() {
 
     if (resp.error) {
       addMsg(`Error: ${resp.error}`, "error");
+      stopProcessingBar();
       setAskState(false);
       return;
     }
@@ -780,6 +879,7 @@ async function askBoris() {
     }
   }
 
+  stopProcessingBar();
   setAskState(false);
 }
 
@@ -1100,6 +1200,7 @@ function openSettings() {
   _settingsSnapshot = {
     timeout: $timeoutSelect.value,
     bridgeUrl: $bridgeUrlInput.value,
+    permissions: $permissionsSelect.value,
     initialPrompt: $initialPrompt.value,
   };
   document.getElementById("settingsBackdrop").classList.add("open");
@@ -1116,6 +1217,7 @@ document.getElementById("settingsCloseBtn").addEventListener("click", () => {
   // Cancel — restore snapshot
   $timeoutSelect.value = _settingsSnapshot.timeout;
   $bridgeUrlInput.value = _settingsSnapshot.bridgeUrl;
+  $permissionsSelect.value = _settingsSnapshot.permissions;
   $initialPrompt.value = _settingsSnapshot.initialPrompt;
   closeSettings();
 });
@@ -1123,12 +1225,14 @@ document.getElementById("settingsBackdrop").addEventListener("click", () => {
   // Cancel on backdrop click
   $timeoutSelect.value = _settingsSnapshot.timeout;
   $bridgeUrlInput.value = _settingsSnapshot.bridgeUrl;
+  $permissionsSelect.value = _settingsSnapshot.permissions;
   $initialPrompt.value = _settingsSnapshot.initialPrompt;
   closeSettings();
 });
 document.getElementById("settingsCancelBtn").addEventListener("click", () => {
   $timeoutSelect.value = _settingsSnapshot.timeout;
   $bridgeUrlInput.value = _settingsSnapshot.bridgeUrl;
+  $permissionsSelect.value = _settingsSnapshot.permissions;
   $initialPrompt.value = _settingsSnapshot.initialPrompt;
   closeSettings();
 });
@@ -1138,7 +1242,7 @@ document.getElementById("settingsSaveBtn").addEventListener("click", () => {
   BRIDGE_URL = url;
   $bridgeUrlInput.value = url;
   chrome.storage.local.set({ timeout: $timeoutSelect.value });
-  chrome.storage.sync.set({ bridgeUrl: url, initialPrompt: $initialPrompt.value });
+  chrome.storage.sync.set({ bridgeUrl: url, permissions: $permissionsSelect.value, initialPrompt: $initialPrompt.value });
   closeSettings();
 });
 

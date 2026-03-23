@@ -83,12 +83,19 @@ def _patch_sdk_parser():
 _SkippedMessage = _patch_sdk_parser()
 
 
+def _permissions_to_tools(permissions):
+    """Map extension permission mode to allowed_tools list."""
+    if permissions == "readonly":
+        return ["Read", "Glob", "Grep"]
+    return ["Read", "Write", "Edit", "Glob", "Grep"]  # readwrite (default)
+
+
 async def _sdk_query(prompt, session_id=None, allowed_tools=None):
     """Send a prompt to Claude Agent SDK and return the result text + session_id."""
     from claude_code_sdk import query as sdk_query, ClaudeCodeOptions
 
     options = ClaudeCodeOptions(
-        allowed_tools=allowed_tools or ["Read", "Glob", "Grep"],
+        allowed_tools=allowed_tools or ["Read", "Write", "Edit", "Glob", "Grep"],
         cwd=str(PROJECT_DIR),
     )
     if session_id:
@@ -459,6 +466,8 @@ def fill():
     data = request.json or {}
     project = data.get("project", "default")
     session_id = _get_session(project)
+    permissions = data.get("permissions", "readwrite")
+    tools = _permissions_to_tools(permissions)
 
     if not session_id:
         return jsonify({"error": "no active session — start or attach first"}), 400
@@ -481,7 +490,7 @@ Formato: {{"actions": [...], "alerts": [...]}}
 alerts = avisos sobre campos que não conseguiste preencher ou que precisam de confirmação."""
 
     try:
-        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id))
+        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id, allowed_tools=tools))
         # Try to parse JSON from result
         parsed = _extract_json(result)
         parsed["steps"] = steps
@@ -531,6 +540,8 @@ def ask():
 
     page_scan = data.get("pageScan")
     screenshot = data.get("screenshot")
+    permissions = data.get("permissions", "readwrite")
+    tools = _permissions_to_tools(permissions)
 
     # If screenshot provided, save as temp file for Claude to read
     screenshot_path = None
@@ -583,7 +594,7 @@ Se o pedido é só uma pergunta, responde normalmente em markdown.]"""
         )
 
     try:
-        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id))
+        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id, allowed_tools=tools))
 
         # If page context was included, try to parse structured response
         if page_scan:
@@ -624,6 +635,8 @@ def ask_stream():
 
     page_scan = data.get("pageScan")
     screenshot = data.get("screenshot")
+    permissions = data.get("permissions", "readwrite")
+    tools = _permissions_to_tools(permissions)
 
     # Build prompt (same logic as /ask)
     screenshot_path = None
@@ -679,7 +692,7 @@ Se o pedido é só uma pergunta, responde normalmente em markdown.]"""
         from claude_code_sdk import query as sdk_query, ClaudeCodeOptions
 
         options = ClaudeCodeOptions(
-            allowed_tools=["Read", "Glob", "Grep"],
+            allowed_tools=tools,
             cwd=str(PROJECT_DIR),
         )
         if session_id:
@@ -770,6 +783,8 @@ def validate():
         return jsonify({"error": "no active session"}), 400
 
     page_scan = data.get("pageScan", {})
+    permissions = data.get("permissions", "readwrite")
+    tools = _permissions_to_tools(permissions)
 
     prompt = f"""Valida os valores actuais dos campos deste formulário.
 
@@ -780,7 +795,7 @@ Para cada campo, verifica se o valor está correcto face aos dados do projecto.
 Devolve JSON puro: {{"validations": [{{"field": "...", "status": "ok|warning|error", "message": "..."}}], "summary": "..."}}"""
 
     try:
-        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id))
+        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id, allowed_tools=tools))
         parsed = _extract_json(result)
         parsed["steps"] = steps
         return jsonify(parsed)
@@ -1024,6 +1039,36 @@ def _find_running_instance():
         pass
 
     return -1  # running but PID unknown
+
+
+# ---------------------------------------------------------------------------
+# RPA — Template save/load endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/template/save", methods=["POST"])
+def save_template():
+    """Save a form template JSON to the project folder."""
+    data = request.json or {}
+    project = data.get("project", "default")
+    template = data.get("template")
+    if not template:
+        return jsonify({"error": "No template provided"}), 400
+
+    dest = PROJECT_DIR / "projects" / project / "candidatura" / "form-template.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(template, ensure_ascii=False, indent=2), encoding="utf-8")
+    return jsonify({"ok": True, "path": str(dest)})
+
+
+@app.route("/template/load", methods=["GET"])
+def load_template():
+    """Load a saved form template from the project folder."""
+    project = request.args.get("project", "default")
+    src = PROJECT_DIR / "projects" / project / "candidatura" / "form-template.json"
+    if not src.exists():
+        return jsonify({"error": "Template not found"}), 404
+    template = json.loads(src.read_text(encoding="utf-8"))
+    return jsonify(template)
 
 
 # ---------------------------------------------------------------------------

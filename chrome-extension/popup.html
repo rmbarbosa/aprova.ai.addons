@@ -622,6 +622,55 @@
       40% { opacity: 1; transform: scale(1); }
     }
 
+    /* ---- Processing status bar (above input) ---- */
+    .processing-bar {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 0 4px 0;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2px;
+    }
+
+    .processing-bar.active { display: flex; }
+    .processing-bar.done .processing-star { animation: none; }
+
+    .processing-star {
+      color: var(--accent);
+      font-size: 13px;
+      animation: starPulse 2s ease-in-out infinite;
+    }
+
+    @keyframes starPulse {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; }
+    }
+
+    .processing-verb {
+      color: var(--text-secondary);
+      font-weight: 600;
+      font-style: italic;
+    }
+
+    .processing-elapsed {
+      color: var(--text-muted);
+      font-size: 10px;
+    }
+
+    .processing-step {
+      color: var(--text-muted);
+      font-size: 10px;
+      margin-left: auto;
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      opacity: 0.7;
+    }
+
     .msg.user {
       align-self: flex-end;
       background: var(--accent-dim);
@@ -1366,6 +1415,9 @@
         <button class="header-menu-item" id="clearChatBtn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>Limpar Conversa</button>
         <button class="header-menu-item header-menu-item--danger" id="disconnectBtn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 11-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>Desligar Sessão</button>
         <div class="header-menu-sep"></div>
+        <button class="header-menu-item" id="rpaRecordBtn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>Gravar Template</button>
+        <button class="header-menu-item" id="rpaLoadBtn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Carregar Template</button>
+        <div class="header-menu-sep"></div>
         <button class="header-menu-item" id="settingsToggle"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Settings</button>
       </div>
     </div>
@@ -1374,6 +1426,40 @@
 
   <!-- Bridge offline banner -->
   <div id="offlineBanner" style="display:none;background:rgba(239,68,68,0.15);color:var(--error);text-align:center;padding:4px 8px;font-size:11px;border-bottom:1px solid rgba(239,68,68,0.3);flex-shrink:0;">Bridge offline</div>
+
+  <!-- RPA Recording banner -->
+  <div class="rpa-banner connected-ui" id="rpaBanner">
+    <div class="rpa-banner-dot"></div>
+    <span class="rpa-banner-text">A gravar... Navegue pelas secções e clique Gravar em cada uma.</span>
+    <button class="rpa-banner-stop" id="rpaStopBtn">Parar</button>
+  </div>
+
+  <!-- RPA Template panel (floating overlay) -->
+  <div class="rpa-backdrop connected-ui" id="rpaBackdrop"></div>
+  <div class="rpa-panel connected-ui" id="rpaPanel">
+    <div class="rpa-panel-header">
+      <span class="rpa-panel-title">Template do Formulário</span>
+      <button class="rpa-panel-close" id="rpaPanelClose" title="Fechar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="rpa-tabs">
+      <button class="rpa-tab active" data-rpa-tab="sections">Secções</button>
+      <button class="rpa-tab" data-rpa-tab="template">Template</button>
+    </div>
+    <div class="rpa-tab-content active" data-rpa-tab-content="sections">
+      <div class="rpa-section-list" id="rpaSectionList"></div>
+    </div>
+    <div class="rpa-tab-content" data-rpa-tab-content="template">
+      <textarea class="rpa-template-textarea" id="rpaTemplateText" spellcheck="false"></textarea>
+    </div>
+    <div class="rpa-panel-footer">
+      <button class="rpa-footer-btn rpa-btn-copy" id="rpaCopyBtn">Copiar</button>
+      <button class="rpa-footer-btn rpa-btn-download" id="rpaDownloadBtn">Download</button>
+      <div class="rpa-panel-footer-spacer"></div>
+      <button class="rpa-footer-btn rpa-btn-cancel" id="rpaCancelBtn">Cancelar</button>
+      <button class="rpa-footer-btn rpa-btn-bridge" id="rpaSaveBridgeBtn">Enviar para Bridge</button>
+      <button class="rpa-footer-btn rpa-btn-submit" id="rpaSubmitBtn">Submeter</button>
+    </div>
+  </div>
 
   <!-- =============== LOBBY (Screen 1) =============== -->
   <div class="lobby" id="lobby">
@@ -1433,6 +1519,16 @@
           <input id="bridgeUrlInput" type="text" placeholder="http://localhost:9090" class="setting-input-mono">
         </div>
       </div>
+      <div class="setting-group">
+        <span class="setting-label">Permissões</span>
+        <span class="setting-hint">Define se esta extensão e a respectiva sessão de Claude podem editar ficheiros do projecto ou apenas ler.</span>
+        <div class="setting-row">
+          <select id="permissionsSelect" class="setting-select">
+            <option value="readonly" selected>Ler Apenas</option>
+            <option value="readwrite">Ler / Escrever</option>
+          </select>
+        </div>
+      </div>
     </div>
     <div class="settings-tab-content" data-tab-content="prompts">
       <div class="setting-group" style="flex:1;display:flex;flex-direction:column;">
@@ -1474,6 +1570,13 @@
 
   <!-- Input (Ask Boris) -->
   <div class="input-area connected-ui">
+    <!-- Processing status bar -->
+    <div class="processing-bar" id="processingBar">
+      <span class="processing-star">✶</span>
+      <span class="processing-verb" id="processingVerb"></span>
+      <span class="processing-elapsed" id="processingElapsed"></span>
+      <span class="processing-step" id="processingStep"></span>
+    </div>
     <!-- Pending attachment preview -->
     <div class="attach-preview" id="attachPreview">
       <div class="attach-preview-inner hidden">
@@ -1497,6 +1600,8 @@
     </div>
   </div>
 
+  <link rel="stylesheet" href="rpa.css">
   <script src="popup.js"></script>
+  <script src="rpa-ui.js"></script>
 </body>
 </html>

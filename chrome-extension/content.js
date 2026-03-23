@@ -1007,6 +1007,102 @@ _runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
 
+      // RPA module handlers
+      case "rpa-capture-section-context": {
+        // Capture current section context for template enrichment
+        const headings = [...document.querySelectorAll("h1, h2, h3, h4")].slice(0, 5).map((h) => h.textContent.trim());
+        const activeTab = document.querySelector(".nav-link.active, .tab-active, [aria-selected='true'], .ui-tabs-active a");
+        const sectionName = activeTab?.textContent?.trim() || headings[0] || document.title;
+
+        // Lightweight field scan (visible fields only)
+        const fields = [...document.querySelectorAll("input, textarea, select")]
+          .filter((el) => {
+            if (el.type === "hidden") return false;
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) return false;
+            let node = el;
+            while (node && node !== document.body) {
+              const style = getComputedStyle(node);
+              if (style.display === "none" || style.visibility === "hidden") return false;
+              node = node.parentElement;
+            }
+            return true;
+          })
+          .map((el) => {
+            const lbl = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`)?.textContent?.trim() : null;
+            return {
+              name: el.name || el.id || "",
+              label: lbl || el.placeholder || el.getAttribute("aria-label") || el.name || el.id || "",
+              type: el.tagName === "SELECT" ? "select" : el.tagName === "TEXTAREA" ? "textarea" : el.type || "text",
+              value: el.tagName === "SELECT" ? el.options[el.selectedIndex]?.text || "" : el.value || "",
+            };
+          });
+
+        sendResponse({
+          sectionName,
+          pageTitle: document.title,
+          url: location.href,
+          headings,
+          fields,
+        });
+        break;
+      }
+
+      case "rpa-get-csrf": {
+        // Scan DOM for CSRF tokens
+        let headerName = null, headerValue = null, bodyField = null, bodyValue = null;
+
+        // Check meta tags
+        const csrfMeta = document.querySelector('meta[name="csrf-token"], meta[name="_csrf"], meta[name="csrf"]');
+        if (csrfMeta) {
+          headerName = "X-CSRF-Token";
+          headerValue = csrfMeta.content;
+        }
+
+        // Check hidden input fields
+        const csrfInput = document.querySelector(
+          'input[name="__RequestVerificationToken"], input[name="_csrf"], input[name="csrf_token"], input[name="_token"]'
+        );
+        if (csrfInput) {
+          bodyField = csrfInput.name;
+          bodyValue = csrfInput.value;
+          if (!headerValue) {
+            headerName = "X-CSRF-Token";
+            headerValue = csrfInput.value;
+          }
+        }
+
+        // Check cookies (XSRF-TOKEN pattern)
+        const xsrfCookie = document.cookie.split(";").find((c) => c.trim().startsWith("XSRF-TOKEN="));
+        if (xsrfCookie && !headerValue) {
+          headerName = "X-XSRF-TOKEN";
+          headerValue = decodeURIComponent(xsrfCookie.split("=")[1]);
+        }
+
+        sendResponse({ headerName, headerValue, bodyField, bodyValue });
+        break;
+      }
+
+      case "rpa-replay-fetch": {
+        // Execute a fetch from the content script context (same origin → cookies included)
+        try {
+          const resp = await fetch(msg.url, {
+            method: msg.method || "POST",
+            headers: msg.headers || {},
+            body: msg.body || null,
+            credentials: "include",
+          });
+          let responseBody = null;
+          try { responseBody = await resp.json(); } catch (_) {
+            try { responseBody = await resp.text(); } catch (_) {}
+          }
+          sendResponse({ status: resp.status, ok: resp.ok, body: responseBody });
+        } catch (err) {
+          sendResponse({ status: 0, ok: false, error: err.message });
+        }
+        break;
+      }
+
       default:
         sendResponse({ error: `Unknown content action: ${msg.action}` });
     }
