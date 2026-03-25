@@ -61,7 +61,9 @@ const RPAUI = (() => {
         return;
       }
 
-      addChatMsg(`RPA: Gravação terminada — ${template.sections.length} secções capturadas.`, "system");
+      const getCount = (template.vocabularies || []).length;
+      const getInfo = getCount > 0 ? `, ${getCount} respostas GET capturadas` : "";
+      addChatMsg(`RPA: Gravação terminada — ${template.sections.length} secções capturadas${getInfo}.`, "system");
       _templateData = template;
       showTemplatePanel(template);
     } catch (err) {
@@ -199,33 +201,6 @@ const RPAUI = (() => {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Load filled template
-  // ---------------------------------------------------------------------------
-  function loadFilledTemplate() {
-    $("headerMenu")?.classList.remove("open");
-    // Show file picker
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const template = JSON.parse(text);
-        if (!template.sections || !Array.isArray(template.sections)) {
-          addChatMsg("RPA: Ficheiro inválido — não contém secções.", "error");
-          return;
-        }
-        addChatMsg(`RPA: Template carregado — ${template.sections.length} secções.`, "system");
-        showTemplatePanel(template);
-      } catch (err) {
-        addChatMsg(`RPA: Erro ao ler ficheiro — ${err.message}`, "error");
-      }
-    };
-    input.click();
-  }
 
   // ---------------------------------------------------------------------------
   // Submit flow
@@ -289,13 +264,53 @@ const RPAUI = (() => {
     addChatMsg(`RPA: Submissão completa — ${ok}/${enabled.length} secções com sucesso.`, "system");
   }
 
+
+  // ---------------------------------------------------------------------------
+  // AI Generate — scan page structure + stage as attachment
+  // ---------------------------------------------------------------------------
+  async function aiGenerate() {
+    $("attachMenu")?.classList.remove("open");
+
+    // Toggle off if already staged
+    if (window.pendingAiGenerate) {
+      window.pendingAiGenerate = false;
+      window._updateAiGenerateThumb();
+      return;
+    }
+
+    // Capture form structure (same as Scan Form) so Claude sees the page context
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) {
+      addChatMsg("RPA: Sem tab activa.", "error");
+      return;
+    }
+
+    addChatMsg("A ler estrutura da página...", "system");
+    try {
+      const data = await chrome.tabs.sendMessage(tab.id, { action: "describe-form-structure" });
+      if (!data || !data.text) {
+        addChatMsg("RPA: Nenhum campo encontrado nesta página.", "error");
+        return;
+      }
+      // Stage form description via popup.js exposed function
+      window.stageFormDesc(data.text, data.fieldCount || 0, "AI Generate");
+    } catch (err) {
+      addChatMsg(`RPA: Falha ao ler página — ${err.message}`, "error");
+      return;
+    }
+
+    // Stage AI Generate flag
+    window.pendingAiGenerate = true;
+    window._updateAiGenerateThumb();
+  }
+
   // ---------------------------------------------------------------------------
   // Init — wire up buttons after DOM ready
   // ---------------------------------------------------------------------------
   function init() {
     // Menu buttons
     $("rpaRecordBtn")?.addEventListener("click", startRecording);
-    $("rpaLoadBtn")?.addEventListener("click", loadFilledTemplate);
+    $("aiGenerateBtn")?.addEventListener("click", aiGenerate);
 
     // Template panel buttons
     $("rpaPanelClose")?.addEventListener("click", closeTemplatePanel);
@@ -328,5 +343,5 @@ const RPAUI = (() => {
     init();
   }
 
-  return { startRecording, stopRecording, loadFilledTemplate, showTemplatePanel };
+  return { startRecording, stopRecording, showTemplatePanel, aiGenerate };
 })();

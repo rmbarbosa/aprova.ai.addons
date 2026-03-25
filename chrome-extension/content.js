@@ -428,6 +428,7 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
       click_button: "Clicar botão",
       wait: "Esperar",
       scroll_to: "Scroll",
+      rpa_replay: "RPA Replay",
     };
 
     const target = findElement(action);
@@ -448,6 +449,7 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
             <button class="aprova-btn aprova-btn-stop">Parar Todas</button>
             <button class="aprova-btn aprova-btn-skip">Não Aplicar e Continuar</button>
             <button class="aprova-btn aprova-btn-yes">Aplicar e Continuar</button>
+            <button class="aprova-btn aprova-btn-all" style="background:#22c55e;color:#fff;">Executar Todas</button>
           </div>
         </div>`;
 
@@ -514,6 +516,7 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
             <button class="aprova-btn aprova-btn-stop">Parar Todas</button>
             <button class="aprova-btn aprova-btn-skip">Não Aplicar e Continuar</button>
             <button class="aprova-btn aprova-btn-yes">Aplicar e Continuar</button>
+            <button class="aprova-btn aprova-btn-all" style="background:#22c55e;color:#fff;">Executar Todas</button>
           </div>
         </div>`;
 
@@ -532,15 +535,19 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
 
     overlay.querySelector(".aprova-btn-yes").onclick = () => dismiss(true);
     const skipBtn = overlay.querySelector(".aprova-btn-skip");
+    const allBtn = overlay.querySelector(".aprova-btn-all");
     if (totalActions <= 1) {
       skipBtn.disabled = true;
+      if (allBtn) allBtn.style.display = "none";
     } else {
       skipBtn.onclick = () => dismiss(false);
+      if (allBtn) allBtn.onclick = () => dismiss("all");
     }
     overlay.querySelector(".aprova-btn-stop").onclick = () => dismiss("stop");
 
     function onKey(e) {
-      if (e.key === "Enter") { e.preventDefault(); dismiss(true); }
+      if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); dismiss("all"); }
+      else if (e.key === "Enter") { e.preventDefault(); dismiss(true); }
       else if (e.key === "Escape" && e.shiftKey) { e.preventDefault(); dismiss("stop"); }
       else if (e.key === "Escape" && totalActions > 1) { e.preventDefault(); dismiss(false); }
     }
@@ -555,7 +562,172 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Sanitize numeric/currency fields in RPA replay body
+// Ensures format: "xxxx.xx" — no thousands separators, no currency symbols
+// ---------------------------------------------------------------------------
+function _sanitizeNumericFields(obj, depth = 0) {
+  if (depth > 15 || !obj || typeof obj !== "object") return;
+  const entries = Array.isArray(obj) ? obj.map((v, i) => [i, v]) : Object.entries(obj);
+  for (const [key, val] of entries) {
+    if (typeof val === "string") {
+      // Detect values that look like numbers/currency but have bad formatting
+      // Match: "€3000", "3.000,00", "15,000.00", "3000,50", "3 000.00", etc.
+      const cleaned = val.replace(/[€$£\s]/g, "").trim();
+      if (!cleaned) continue;
+      // Pattern: digits with possible separators and decimal
+      if (/^-?[\d.,]+$/.test(cleaned) && /\d/.test(cleaned)) {
+        // Determine if comma is decimal separator (European) or thousands
+        const lastComma = cleaned.lastIndexOf(",");
+        const lastDot = cleaned.lastIndexOf(".");
+        let normalized;
+        if (lastComma > lastDot && lastComma === cleaned.length - 3) {
+          // European format: "3.000,50" → comma is decimal
+          normalized = cleaned.replace(/\./g, "").replace(",", ".");
+        } else if (lastDot > lastComma && lastDot === cleaned.length - 3) {
+          // US/standard format: "3,000.50" → dot is decimal
+          normalized = cleaned.replace(/,/g, "");
+        } else if (lastComma > -1 && lastDot === -1 && lastComma === cleaned.length - 3) {
+          // "3000,50" → comma is decimal
+          normalized = cleaned.replace(",", ".");
+        } else {
+          // No decimal part or already clean → remove non-digit separators
+          normalized = cleaned.replace(/,/g, "");
+        }
+        // Only apply if result is a valid number
+        const num = parseFloat(normalized);
+        if (!isNaN(num) && isFinite(num)) {
+          obj[key] = num.toFixed(2);
+        }
+      }
+    } else if (typeof val === "object" && val !== null) {
+      _sanitizeNumericFields(val, depth + 1);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Smart table row addition — detect missing table row fields and click "+"
+// ---------------------------------------------------------------------------
+async function _tryAddTableRow(action) {
+  // Extract field name from selector: [name='dominio_1'] → dominio_1, or #tipo_3 → tipo_3
+  const selector = action.selector || "";
+  const nameMatch = selector.match(/name=['"]?([^'"\]]+)/) || selector.match(/#(\w+)/);
+  if (!nameMatch) return false;
+
+  const fieldName = nameMatch[1];
+  // Detect numeric suffix pattern: fieldname_N or fieldnameN
+  const rowMatch = fieldName.match(/^(.+?)_?(\d+)$/);
+  if (!rowMatch) return false;
+
+  const baseName = rowMatch[1];
+  const rowNum = parseInt(rowMatch[2]);
+
+  // Find the "+" (add row) button for this table
+  // Strategy 1: Look for buttons with onclick="adicionar_linha(tbc_...)"
+  const addButtons = [...document.querySelectorAll('button[onclick*="adicionar_linha"], button[title*="Adicionar"]')];
+
+  if (addButtons.length === 0) return false;
+
+  // Try to find the closest add button to a table that would contain this field
+  // Strategy: find all tables, check which one has fields with the same base name pattern
+  let targetBtn = null;
+
+  for (const btn of addButtons) {
+    // Extract table name from onclick: adicionar_linha(tbc_actividades) → tbc_actividades
+    const onclickMatch = (btn.getAttribute("onclick") || "").match(/adicionar_linha\((\w+)\)/);
+    if (onclickMatch) {
+      const tableName = onclickMatch[1];
+      const table = document.getElementById(tableName) || document.querySelector(`[name='${tableName}']`);
+      // Check if this table is related to our field by checking existing fields with same base
+      if (table) {
+        const existingField = table.querySelector(`[name*='${baseName}']`);
+        if (existingField || baseName.toLowerCase().includes(tableName.replace("tbc_", "").slice(0, 4))) {
+          targetBtn = btn;
+          break;
+        }
+      }
+    }
+  }
+
+  // Fallback: use the first add button if only one exists, or the closest one in DOM
+  if (!targetBtn && addButtons.length === 1) {
+    targetBtn = addButtons[0];
+  }
+
+  if (!targetBtn) return false;
+
+  // Count how many rows need to be added
+  // Check how many rows already exist by counting fields with the base name
+  const existingFields = document.querySelectorAll(`[name*='${baseName}']`);
+  const existingRows = existingFields.length;
+  const rowsNeeded = rowNum - existingRows;
+
+  console.log(`[Smart table] Field "${fieldName}" not found. Adding ${Math.max(1, rowsNeeded)} row(s) via "${targetBtn.title || 'add button'}"`);
+
+  // Click "+" enough times to create the needed row
+  for (let i = 0; i < Math.max(1, rowsNeeded); i++) {
+    targetBtn.click();
+    // Wait for DOM to update
+    await new Promise((r) => setTimeout(r, 300));
+  }
+
+  // Extra wait for any async rendering
+  await new Promise((r) => setTimeout(r, 200));
+
+  // Check if the element now exists
+  return !!findElement(action);
+}
+
 async function executeAction(action, confirmMode, totalActions = 1) {
+  // RPA replay — POST directly to form server (same origin, cookies included)
+  // Runs before confirm overlay — user already confirmed by clicking Send in popup
+  if (action.type === "rpa_replay") {
+    // Fallback: use current page URL if postUrl not provided
+    // compete2020 forms POST to same base URL with ?R suffix
+    let postUrl = action.postUrl;
+    if (!postUrl) {
+      const base = window.location.href.split("?")[0];
+      // If URL already ends with query, use as-is; otherwise append ?R for compete2020
+      postUrl = base.includes("-srv.php") ? base + "?R" : window.location.href;
+    }
+    try {
+      // Safety net: inject hidden input values from the page into body if missing
+      const bodyObj = typeof action.body === "string" ? JSON.parse(action.body) : { ...action.body };
+      const hiddens = document.querySelectorAll('input[type="hidden"]');
+      for (const h of hiddens) {
+        if (h.name && h.value && !(h.name in bodyObj)) {
+          bodyObj[h.name] = h.value;
+          console.log(`[RPA replay] injected hidden field: ${h.name}=${h.value}`);
+        }
+      }
+      // Sanitize numeric/currency values: ensure "xxxx.xx" format (no thousands sep, no currency symbols)
+      _sanitizeNumericFields(bodyObj);
+      const body = JSON.stringify(bodyObj);
+      const headers = action.headers || { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" };
+      console.log("[RPA replay]", action.method || "POST", postUrl, "body size:", body.length);
+      const resp = await fetch(postUrl, {
+        method: action.method || "POST",
+        headers,
+        body,
+        credentials: "include",
+      });
+      let responseBody = null;
+      try { responseBody = await resp.json(); } catch (_) {
+        try { responseBody = await resp.text(); } catch (_) {}
+      }
+      console.log("[RPA replay] response:", resp.status, resp.ok, responseBody);
+      // Auto-refresh page after successful replay so UI reflects the submitted data
+      if (resp.ok) {
+        setTimeout(() => window.location.reload(), 800);
+      }
+      return { status: resp.ok ? "done" : "failed", action, httpStatus: resp.status, responseBody, usedUrl: postUrl };
+    } catch (err) {
+      console.error("[RPA replay] error:", err);
+      return { status: "failed", action, error: err.message };
+    }
+  }
+
   if (confirmMode) {
     let currentValue = null;
     if (action.type === "fill_text" || action.type === "replace_text") {
@@ -564,6 +736,7 @@ async function executeAction(action, confirmMode, totalActions = 1) {
     }
     const approved = await showConfirmOverlay(action, currentValue, totalActions);
     if (approved === "stop") return { status: "stopped", action };
+    if (approved === "all") return { status: "execute_all", action };
     if (!approved) return { status: "skipped", action };
   }
 
@@ -578,7 +751,17 @@ async function executeAction(action, confirmMode, totalActions = 1) {
     return { status: el ? "done" : "not_found", action };
   }
 
-  const el = findElement(action);
+  let el = findElement(action);
+
+  // Smart table row detection: if element not found and selector looks like a table row
+  // field (e.g. [name='dominio_1'], #tipo_3), try clicking the "+" button to add a row
+  if (!el && (action.type === "fill_text" || action.type === "select_option")) {
+    const added = await _tryAddTableRow(action);
+    if (added) {
+      el = findElement(action);
+    }
+  }
+
   if (!el) return { status: "not_found", action };
 
   switch (action.type) {
@@ -732,20 +915,27 @@ async function executeAction(action, confirmMode, totalActions = 1) {
 
 async function executeActions(actions, confirmMode) {
   const results = [];
+  let skipConfirm = false;
   for (const action of actions) {
-    const result = await executeAction(action, confirmMode, actions.length);
-    results.push(result);
+    const result = await executeAction(action, skipConfirm ? false : confirmMode, actions.length);
+    // "Executar Todas" — approve this action and skip confirmation for remaining
+    if (result.status === "execute_all") {
+      skipConfirm = true;
+      // Re-execute this action without confirmation
+      const reResult = await executeAction(action, false, actions.length);
+      results.push(reResult);
+    } else {
+      results.push(result);
+    }
     if (result.status === "stopped") {
-      // Clean up any remaining overlays
       document.querySelectorAll(".aprova-confirm-overlay").forEach((el) => el.remove());
       break;
     }
     if (result.status === "not_found") {
-      // Log but continue with remaining actions
       console.warn("[Aprova.ai] Element not found:", action);
     }
-    // Visual pause between actions
-    await new Promise((r) => setTimeout(r, 200));
+    // Brief pause between actions
+    await new Promise((r) => setTimeout(r, 50));
   }
   return results;
 }
@@ -858,6 +1048,20 @@ _runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const allFields = [...document.querySelectorAll("input, textarea, select")]
           .filter((el) => _isStrictlyVisible(el));
 
+        // Pre-load all SELECT options in parallel (instead of 150ms each sequentially)
+        const selectFields = allFields.filter((el) => el.tagName === "SELECT");
+        if (selectFields.length > 0) {
+          await Promise.all(selectFields.map(async (el) => {
+            try {
+              el.focus();
+              el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+              await new Promise((r) => setTimeout(r, 150));
+              el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+              el.blur();
+            } catch (_) {}
+          }));
+        }
+
         const lines = [];
         lines.push(`Página: ${document.title}`);
         lines.push(`URL: ${location.href}`);
@@ -905,14 +1109,7 @@ _runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const fieldLines = [];
 
           if (el.tagName === "SELECT") {
-            try {
-              el.focus();
-              el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-              await new Promise((r) => setTimeout(r, 150));
-              el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-              el.blur();
-            } catch (_) {}
-
+            // Options already pre-loaded in parallel above
             const opts = [...el.options]
               .filter((o) => o.value)
               .map((o) => o.text.trim())

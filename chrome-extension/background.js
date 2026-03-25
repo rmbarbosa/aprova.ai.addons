@@ -133,11 +133,23 @@ async function bridgeRequest(endpoint, method = "GET", body = null) {
   };
   if (body) opts.body = JSON.stringify(body);
 
-  try {
-    const resp = await fetch(`${BRIDGE_URL}${endpoint}`, opts);
-    return await resp.json();
-  } catch (err) {
-    return { error: `Bridge unreachable: ${err.message}` };
+  // Long timeout for session-start/attach (Claude reads files), short for others
+  const isLong = endpoint.startsWith("/session/start") || endpoint.startsWith("/session/attach");
+  const timeoutMs = isLong ? 120000 : 15000;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const resp = await fetch(`${BRIDGE_URL}${endpoint}`, {
+        ...opts,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return await resp.json();
+    } catch (err) {
+      if (attempt === 0 && !isLong && (err.name === "TimeoutError" || err.name === "AbortError")) {
+        continue; // retry once on timeout (only for short requests)
+      }
+      return { error: `Bridge unreachable: ${err.message}` };
+    }
   }
 }
 
@@ -192,88 +204,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           );
           break;
 
-        case "fill": {
-          // Get page scan from content script first
-          const [tab] = await chrome.tabs.query({
-            active: true,
-            currentWindow: true,
-          });
-          if (!tab) {
-            sendResponse({ error: "No active tab" });
-            break;
-          }
-
-          // Ask content script to scan the page
-          const pageScan = await chrome.tabs.sendMessage(tab.id, {
-            action: "scan-page",
-          });
-
-          // Send to bridge
-          const result = await bridgeRequest("/fill", "POST", {
-            project: msg.project,
-            pageScan,
-            permissions: msg.permissions,
-          });
-
-          // If we have actions, send them to content script for execution
-          if (result.actions && !result.error) {
-            const execResult = await chrome.tabs.sendMessage(tab.id, {
-              action: "execute-actions",
-              actions: result.actions,
-              confirmMode: msg.confirmMode !== false,
-            });
-            sendResponse({ ...result, execution: execResult });
-          } else {
-            sendResponse(result);
-          }
-          break;
-        }
-
-        case "fix":
-          sendResponse(
-            await bridgeRequest("/fix", "POST", {
-              project: msg.project,
-              fieldLabel: msg.fieldLabel,
-              currentValue: msg.currentValue,
-              feedback: msg.feedback,
-            })
-          );
-          break;
-
-        case "ask": {
-          const askBody = {
-            project: msg.project,
-            question: msg.question,
-          };
-          if (msg.pageScan) askBody.pageScan = msg.pageScan;
-          if (msg.screenshot) askBody.screenshot = msg.screenshot;
-          if (msg.permissions) askBody.permissions = msg.permissions;
-          sendResponse(await bridgeRequest("/ask", "POST", askBody));
-          break;
-        }
-
-        case "validate": {
-          const [vTab] = await chrome.tabs.query({
-            active: true,
-            currentWindow: true,
-          });
-          if (!vTab) {
-            sendResponse({ error: "No active tab" });
-            break;
-          }
-          const vScan = await chrome.tabs.sendMessage(vTab.id, {
-            action: "scan-page",
-          });
-          sendResponse(
-            await bridgeRequest("/validate", "POST", {
-              project: msg.project,
-              pageScan: vScan,
-              permissions: msg.permissions,
-            })
-          );
-          break;
-        }
-
         case "push-page-state":
           sendResponse(
             await bridgeRequest("/browser/state", "POST", {
@@ -321,10 +251,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             template: msg.template,
           }));
           break;
-        case "rpa-load-template":
-          sendResponse(await bridgeRequest(`/template/load?project=${encodeURIComponent(msg.project)}`));
-          break;
-
         default:
           sendResponse({ error: `Unknown action: ${msg.action}` });
       }

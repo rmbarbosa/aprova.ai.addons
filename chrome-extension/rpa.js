@@ -12,8 +12,10 @@ const RPA = (() => {
   let _recording = false;
   let _recordingTabId = null;
   let _captures = [];
+  let _getCaptures = []; // GET responses (vocabularies, combo options, etc.)
   let _startTime = null;
   let _requestMap = {}; // requestId → capture data
+  let _pendingGets = {}; // requestId → {url, timestamp} for GET response capture
   let _fetchEnabled = false;
 
   // ---------------------------------------------------------------------------
@@ -62,11 +64,74 @@ const RPA = (() => {
       }
     }
 
+    // Track GET requests for vocabulary/options capture
+    if (method === "Network.requestWillBeSent") {
+      const req = params.request;
+      if (req.method === "GET") {
+        _pendingGets[params.requestId] = { url: req.url, timestamp: Date.now() };
+      }
+    }
+
     if (method === "Network.responseReceived") {
+      // Update POST capture status
       const cap = _requestMap[params.requestId];
       if (cap) {
         cap.responseStatus = params.response?.status || null;
       }
+
+      // Capture GET response body for vocabulary extraction
+      const pending = _pendingGets[params.requestId];
+      if (pending && params.response?.status === 200) {
+        const contentType = params.response.headers?.["content-type"] || params.response.headers?.["Content-Type"] || "";
+        if (contentType.includes("json") || contentType.includes("javascript")) {
+          _captureGetResponse(source.tabId, params.requestId, pending);
+        }
+      }
+    }
+
+    // Also handle response body available via Network.loadingFinished
+    if (method === "Network.loadingFinished") {
+      const pending = _pendingGets[params.requestId];
+      if (pending && !pending.captured) {
+        _captureGetResponse(source.tabId, params.requestId, pending);
+      }
+    }
+  }
+
+  async function _captureGetResponse(tabId, requestId, pending) {
+    if (pending.captured) return; // avoid double capture
+    pending.captured = true;
+
+    try {
+      const result = await _cdpSend(tabId, "Network.getResponseBody", { requestId });
+      if (!result?.body) return;
+
+      let parsed = null;
+      try { parsed = JSON.parse(result.body); } catch (_) {}
+      if (!parsed) return;
+
+      _getCaptures.push({
+        url: pending.url,
+        responseBody: parsed,
+        timestamp: pending.timestamp,
+        size: result.body.length,
+      });
+
+      // Notify popup
+      chrome.runtime.sendMessage({
+        action: "rpa-capture-event",
+        capture: {
+          url: pending.url,
+          method: "GET",
+          fieldCount: Array.isArray(parsed) ? parsed.length : 0,
+          index: _getCaptures.length,
+          sectionName: `GET ${new URL(pending.url).pathname.split("/").pop() || "response"}`,
+        },
+      }).catch(() => {});
+    } catch (_) {
+      // Response body not available (e.g. redirect, streamed) — ignore
+    } finally {
+      delete _pendingGets[requestId];
     }
   }
 
@@ -235,7 +300,9 @@ const RPA = (() => {
 
     _recordingTabId = tab.id;
     _captures = [];
+    _getCaptures = [];
     _requestMap = {};
+    _pendingGets = {};
     _startTime = Date.now();
 
     // Attach debugger
@@ -288,6 +355,7 @@ const RPA = (() => {
     const template = _compileTemplate();
     _recordingTabId = null;
     _requestMap = {};
+    _pendingGets = {};
 
     return template;
   }
@@ -347,12 +415,20 @@ const RPA = (() => {
         };
       });
 
+    // Compile GET responses as vocabularies
+    const vocabularies = _getCaptures.map((g) => ({
+      url: g.url,
+      responseBody: g.responseBody,
+      timestamp: new Date(g.timestamp).toISOString(),
+    }));
+
     return {
-      templateVersion: "1.0",
+      templateVersion: "2.0",
       formName: "",
       formUrl: _captures[0]?.url?.split("?")[0] || "",
       recordedAt: new Date(_startTime).toISOString(),
       sections,
+      vocabularies,
     };
   }
 

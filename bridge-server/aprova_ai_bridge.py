@@ -90,7 +90,110 @@ def _permissions_to_tools(permissions):
     return ["Read", "Write", "Edit", "Glob", "Grep"]  # readwrite (default)
 
 
-async def _sdk_query(prompt, session_id=None, allowed_tools=None):
+def _slim_page_scan(scan):
+    """Strip pageScan to essential fields only — saves 60-80% tokens."""
+    if not scan or not isinstance(scan, dict):
+        return scan
+    slim = {}
+    if "pageContext" in scan:
+        ctx = scan["pageContext"]
+        slim["pageContext"] = {
+            "title": ctx.get("title", ""),
+            "url": ctx.get("url", ""),
+            "activeTab": ctx.get("activeTab", ""),
+        }
+    if "fields" in scan:
+        slim["fields"] = []
+        for f in scan["fields"]:
+            if f.get("disabled") or f.get("readOnly"):
+                continue  # skip disabled/readonly fields
+            sf = {k: f[k] for k in ("id", "name", "type", "label", "value", "required") if k in f}
+            # For selects: send option count + selected, not full list
+            if f.get("type") == "select" and f.get("options"):
+                sf["optionCount"] = len(f["options"])
+                sf["selectedOption"] = f.get("currentValue", "")
+            slim["fields"].append(sf)
+    if "buttons" in scan:
+        slim["buttons"] = [{"text": b.get("text", ""), "type": b.get("type", "")} for b in scan["buttons"][:5]]
+    return slim
+
+
+def _compact_json(obj):
+    """JSON with no whitespace — saves ~30% tokens."""
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+# ---------------------------------------------------------------------------
+# Smart model routing — pick fastest model for the task
+# ---------------------------------------------------------------------------
+MODEL_FAST = "claude-sonnet-4-20250514"    # Fast, good for simple tasks
+MODEL_DEFAULT = "claude-sonnet-4-20250514"  # Default for chat/ask
+MODEL_HEAVY = None                          # None = SDK default (uses configured model)
+
+def _pick_model(task, page_scan=None):
+    """Select model based on task complexity."""
+    field_count = 0
+    if page_scan and isinstance(page_scan, dict):
+        field_count = len(page_scan.get("fields", []))
+
+    if task == "init":
+        return MODEL_HEAVY  # session init reads many files — use best model
+    if task == "ask" and field_count == 0:
+        return MODEL_FAST   # simple question without page context
+    if task == "ask" and field_count > 0:
+        return MODEL_DEFAULT  # question with page context
+    return MODEL_DEFAULT
+
+
+# ---------------------------------------------------------------------------
+# Pre-compute project context for session init
+# ---------------------------------------------------------------------------
+def _precompute_project_context(project):
+    """Read key project files and return a summary string for the init prompt.
+    This avoids Claude needing multiple Read tool calls at session start."""
+    ctx_parts = []
+    project_dir = PROJECT_DIR / "projects" / project
+
+    # 1. _projeto.md — project overview
+    projeto_md = project_dir / "_projeto.md"
+    if projeto_md.exists():
+        text = projeto_md.read_text(encoding="utf-8")
+        ctx_parts.append(f"## _projeto.md\n{text[:3000]}")
+
+    # 2. Latest candidatura version — find latest vN folder
+    candidatura_dir = None
+    for subdir in sorted(project_dir.glob("candidatura/*/"), reverse=True):
+        versions = sorted(subdir.glob("v*/"), reverse=True)
+        if versions:
+            candidatura_dir = versions[0]
+            break
+
+    if candidatura_dir:
+        # proposta-draft.md
+        proposta = candidatura_dir / "proposta-draft.md"
+        if proposta.exists():
+            text = proposta.read_text(encoding="utf-8")
+            ctx_parts.append(f"## proposta-draft.md (primeiros 4000 chars)\n{text[:4000]}")
+
+        # plano-financeiro
+        for plano in candidatura_dir.glob("plano-financeiro*"):
+            if plano.is_file():
+                text = plano.read_text(encoding="utf-8")
+                ctx_parts.append(f"## {plano.name} (primeiros 2000 chars)\n{text[:2000]}")
+                break
+
+    if not ctx_parts:
+        return ""
+
+    return (
+        "\n\n--- CONTEXTO PRÉ-CARREGADO (resumo dos ficheiros principais) ---\n\n"
+        + "\n\n".join(ctx_parts)
+        + "\n\n--- FIM DO CONTEXTO PRÉ-CARREGADO ---\n"
+        "Usa Read/Glob/Grep para aceder ao conteúdo completo quando necessário.\n"
+    )
+
+
+async def _sdk_query(prompt, session_id=None, allowed_tools=None, max_turns=None, model=None):
     """Send a prompt to Claude Agent SDK and return the result text + session_id."""
     from claude_code_sdk import query as sdk_query, ClaudeCodeOptions
 
@@ -98,6 +201,10 @@ async def _sdk_query(prompt, session_id=None, allowed_tools=None):
         allowed_tools=allowed_tools or ["Read", "Write", "Edit", "Glob", "Grep"],
         cwd=str(PROJECT_DIR),
     )
+    if model:
+        options.model = model
+    if max_turns:
+        options.max_turns = max_turns
     if session_id:
         options.resume = session_id
 
@@ -393,9 +500,13 @@ def start_session():
 
     try:
         prompt = _INIT_PROMPT.format(project=project)
+        pre_ctx = _precompute_project_context(project)
+        if pre_ctx:
+            prompt += "\n\n" + pre_ctx
         if extra_prompt:
             prompt += "\n\n" + extra_prompt
-        result, sid, steps = _run_async(_sdk_query(prompt))
+        model = _pick_model("init")
+        result, sid, steps = _run_async(_sdk_query(prompt, max_turns=15, model=model))
         sessions[project] = {
             "session_id": sid,
             "mode": "created",
@@ -421,9 +532,13 @@ def attach_session():
 
     try:
         prompt = _INIT_PROMPT.format(project=project)
+        pre_ctx = _precompute_project_context(project)
+        if pre_ctx:
+            prompt += "\n\n" + pre_ctx
         if extra_prompt:
             prompt += "\n\n" + extra_prompt
-        result, sid, steps = _run_async(_sdk_query(prompt))
+        model = _pick_model("init")
+        result, sid, steps = _run_async(_sdk_query(prompt, max_turns=15, model=model))
         sessions[project] = {
             "session_id": sid,
             "mode": "created",
@@ -460,165 +575,6 @@ def _get_session(project):
     return entry["session_id"]
 
 
-@app.route("/fill", methods=["POST"])
-def fill():
-    """Send page scan to Claude, get back fill actions."""
-    data = request.json or {}
-    project = data.get("project", "default")
-    session_id = _get_session(project)
-    permissions = data.get("permissions", "readwrite")
-    tools = _permissions_to_tools(permissions)
-
-    if not session_id:
-        return jsonify({"error": "no active session — start or attach first"}), 400
-
-    page_scan = data.get("pageScan", {})
-
-    prompt = f"""Automatiza o preenchimento desta página do formulário.
-
-Estado actual da página:
-{json.dumps(page_scan, ensure_ascii=False, indent=2)}
-
-Devolve uma lista sequencial de ACÇÕES em JSON puro (sem markdown fences):
-- fill_text: preencher texto (selector, value, description)
-- select_option: seleccionar combobox (selector, value, description)
-- click_radio / click_checkbox: seleccionar (selector, value, description)
-- click_button: clicar botão (selector, description)
-- wait: esperar N ms (ms)
-
-Formato: {{"actions": [...], "alerts": [...]}}
-alerts = avisos sobre campos que não conseguiste preencher ou que precisam de confirmação."""
-
-    try:
-        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id, allowed_tools=tools))
-        # Try to parse JSON from result
-        parsed = _extract_json(result)
-        parsed["steps"] = steps
-        return jsonify(parsed)
-    except Exception as e:
-        return jsonify({"error": str(e), "raw": result if "result" in dir() else ""}), 500
-
-
-@app.route("/fix", methods=["POST"])
-def fix():
-    """Fix a specific field value."""
-    data = request.json or {}
-    project = data.get("project", "default")
-    session_id = _get_session(project)
-
-    if not session_id:
-        return jsonify({"error": "no active session"}), 400
-
-    prompt = f"""Corrige o campo "{data.get('fieldLabel', '')}".
-Valor actual: {data.get('currentValue', '')}
-Problema: {data.get('feedback', '')}
-Devolve JSON puro: {{"actions": [{{"type": "fill_text", "selector": "...", "value": "novo valor", "description": "..."}}]}}"""
-
-    try:
-        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id))
-        parsed = _extract_json(result)
-        parsed["steps"] = steps
-        return jsonify(parsed)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/ask", methods=["POST"])
-def ask():
-    """Free-form question to Claude ('Ask Boris').
-    If pageScan is included, Claude gets page context and may return actions."""
-    data = request.json or {}
-    project = data.get("project", "default")
-    session_id = _get_session(project)
-
-    if not session_id:
-        return jsonify({"error": "no active session"}), 400
-
-    question = data.get("question", "")
-    if not question:
-        return jsonify({"error": "question required"}), 400
-
-    page_scan = data.get("pageScan")
-    screenshot = data.get("screenshot")
-    permissions = data.get("permissions", "readwrite")
-    tools = _permissions_to_tools(permissions)
-
-    # If screenshot provided, save as temp file for Claude to read
-    screenshot_path = None
-    if screenshot:
-        import base64, tempfile
-        # Strip data URL prefix: "data:image/png;base64,..."
-        header, b64data = screenshot.split(",", 1) if "," in screenshot else ("", screenshot)
-        img_bytes = base64.b64decode(b64data)
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", prefix="aprova_screenshot_", delete=False,
-                                          dir=str(PROJECT_DIR))
-        tmp.write(img_bytes)
-        tmp.close()
-        screenshot_path = tmp.name
-
-    if screenshot_path:
-        ss_path = screenshot_path.replace("\\", "/")
-        scan_section = ""
-        if page_scan:
-            scan_section = (
-                f"\n\nDados estruturados da página (scan DOM):\n"
-                f"{json.dumps(page_scan, ensure_ascii=False, indent=2)}\n"
-            )
-        prompt = (
-            f"{question}\n\n"
-            f"PRIMEIRO: lê o screenshot da página com Read file_path=\"{ss_path}\"\n"
-            f"É uma imagem PNG do ecrã do utilizador. Analisa o que vês."
-            f"{scan_section}\n"
-            "[Instrução: responde de forma concisa e directa. "
-            "Não repitas informação já dada nesta sessão. "
-            "Usa markdown para formatar.]"
-        )
-    elif page_scan:
-        prompt = f"""{question}
-
-Estado actual da página:
-{json.dumps(page_scan, ensure_ascii=False, indent=2)}
-
-[Instrução: responde de forma concisa e directa.
-Não repitas informação já dada nesta sessão.
-Se o pedido envolve preencher/alterar campos, devolve JSON puro:
-{{"actions": [...], "alerts": [...], "answer": "..."}}
-Cada acção: {{"type": "fill_text|select_option|click_radio|click_checkbox|click_button", "selector": "...", "value": "...", "description": "..."}}
-Se o pedido é só uma pergunta, responde normalmente em markdown.]"""
-    else:
-        prompt = (
-            f"{question}\n\n"
-            "[Instrução: responde de forma concisa e directa. "
-            "Não repitas informação já dada nesta sessão. "
-            "Usa markdown para formatar.]"
-        )
-
-    try:
-        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id, allowed_tools=tools))
-
-        # If page context was included, try to parse structured response
-        if page_scan:
-            parsed = _extract_json(result)
-            if "actions" in parsed:
-                return jsonify({
-                    "actions": parsed["actions"],
-                    "alerts": parsed.get("alerts", []),
-                    "answer": parsed.get("answer", ""),
-                    "steps": steps,
-                })
-
-        return jsonify({"answer": result, "steps": steps})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        # Clean up temp screenshot
-        if screenshot_path:
-            try:
-                os.unlink(screenshot_path)
-            except OSError:
-                pass
-
-
 @app.route("/ask/stream", methods=["POST"])
 def ask_stream():
     """SSE streaming version of /ask — sends text chunks as they arrive."""
@@ -638,7 +594,11 @@ def ask_stream():
     permissions = data.get("permissions", "readwrite")
     tools = _permissions_to_tools(permissions)
 
-    # Build prompt (same logic as /ask)
+    # Slim down pageScan to save tokens
+    if page_scan:
+        page_scan = _slim_page_scan(page_scan)
+
+    # Build prompt
     screenshot_path = None
     if screenshot:
         import base64, tempfile
@@ -656,7 +616,7 @@ def ask_stream():
         if page_scan:
             scan_section = (
                 f"\n\nDados estruturados da página (scan DOM):\n"
-                f"{json.dumps(page_scan, ensure_ascii=False, indent=2)}\n"
+                f"{_compact_json(page_scan)}\n"
             )
         prompt = (
             f"{question}\n\n"
@@ -671,13 +631,15 @@ def ask_stream():
         prompt = f"""{question}
 
 Estado actual da página:
-{json.dumps(page_scan, ensure_ascii=False, indent=2)}
+{_compact_json(page_scan)}
 
 [Instrução: responde de forma concisa e directa.
 Não repitas informação já dada nesta sessão.
+Usa APENAS as tools Read, Glob, Grep para ler ficheiros. NÃO uses WebFetch, playwright, ou qualquer MCP tool.
 Se o pedido envolve preencher/alterar campos, devolve JSON puro:
 {{"actions": [...], "alerts": [...], "answer": "..."}}
 Cada acção: {{"type": "fill_text|select_option|click_radio|click_checkbox|click_button", "selector": "...", "value": "...", "description": "..."}}
+Para replay RPA (submeter dados directamente ao servidor): {{"type": "rpa_replay", "method": "POST", "body": {{...}}, "description": "..."}}
 Se o pedido é só uma pergunta, responde normalmente em markdown.]"""
     else:
         prompt = (
@@ -687,14 +649,24 @@ Se o pedido é só uma pergunta, responde normalmente em markdown.]"""
             "Usa markdown para formatar.]"
         )
 
+    model = _pick_model("ask", page_scan)
+
     def generate():
         import queue
         from claude_code_sdk import query as sdk_query, ClaudeCodeOptions
 
+        # Block MCP/web tools when working with page context (scan form, validate,
+        # screenshot, AI Generate) — these only need local file access
+        has_page_context = page_scan or screenshot or "[AI GENERATE]" in prompt
         options = ClaudeCodeOptions(
             allowed_tools=tools,
+            max_turns=10,
             cwd=str(PROJECT_DIR),
         )
+        if has_page_context:
+            options.disallow_tools = ["mcp__*", "WebFetch", "WebSearch"]
+        if model:
+            options.model = model
         if session_id:
             options.resume = session_id
 
@@ -771,36 +743,6 @@ Se o pedido é só uma pergunta, responde normalmente em markdown.]"""
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-
-@app.route("/validate", methods=["POST"])
-def validate():
-    """Validate current form values."""
-    data = request.json or {}
-    project = data.get("project", "default")
-    session_id = _get_session(project)
-
-    if not session_id:
-        return jsonify({"error": "no active session"}), 400
-
-    page_scan = data.get("pageScan", {})
-    permissions = data.get("permissions", "readwrite")
-    tools = _permissions_to_tools(permissions)
-
-    prompt = f"""Valida os valores actuais dos campos deste formulário.
-
-Estado actual:
-{json.dumps(page_scan, ensure_ascii=False, indent=2)}
-
-Para cada campo, verifica se o valor está correcto face aos dados do projecto.
-Devolve JSON puro: {{"validations": [{{"field": "...", "status": "ok|warning|error", "message": "..."}}], "summary": "..."}}"""
-
-    try:
-        result, _, steps = _run_async(_sdk_query(prompt, session_id=session_id, allowed_tools=tools))
-        parsed = _extract_json(result)
-        parsed["steps"] = steps
-        return jsonify(parsed)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -1060,15 +1002,6 @@ def save_template():
     return jsonify({"ok": True, "path": str(dest)})
 
 
-@app.route("/template/load", methods=["GET"])
-def load_template():
-    """Load a saved form template from the project folder."""
-    project = request.args.get("project", "default")
-    src = PROJECT_DIR / "projects" / project / "candidatura" / "form-template.json"
-    if not src.exists():
-        return jsonify({"error": "Template not found"}), 404
-    template = json.loads(src.read_text(encoding="utf-8"))
-    return jsonify(template)
 
 
 # ---------------------------------------------------------------------------
