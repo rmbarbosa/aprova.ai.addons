@@ -395,6 +395,15 @@ const RPA = (() => {
           }
         }
 
+        // Detect context IDs: top-level body fields that are not fixed structural fields
+        const fixedFields = new Set(["dest", "cand_id", "pgn", "op", "benef", "dados"]);
+        const contextIds = {};
+        for (const [k, v] of Object.entries(c.bodyParsed || {})) {
+          if (!fixedFields.has(k) && typeof v !== "object") {
+            contextIds[k] = v;
+          }
+        }
+
         return {
           order: i + 1,
           enabled: true,
@@ -403,6 +412,7 @@ const RPA = (() => {
           method: c.method,
           headers: staticHeaders,
           dynamicHeaders,
+          contextIds,
           body: c.bodyParsed,
           responseStatus: c.responseStatus,
           domContext: c.domSnapshot

@@ -983,23 +983,6 @@ def _find_running_instance():
     return -1  # running but PID unknown
 
 
-# ---------------------------------------------------------------------------
-# RPA — Template save/load endpoints
-# ---------------------------------------------------------------------------
-
-@app.route("/template/save", methods=["POST"])
-def save_template():
-    """Save a form template JSON to the project folder."""
-    data = request.json or {}
-    project = data.get("project", "default")
-    template = data.get("template")
-    if not template:
-        return jsonify({"error": "No template provided"}), 400
-
-    dest = PROJECT_DIR / "projects" / project / "candidatura" / "form-template.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(template, ensure_ascii=False, indent=2), encoding="utf-8")
-    return jsonify({"ok": True, "path": str(dest)})
 
 
 

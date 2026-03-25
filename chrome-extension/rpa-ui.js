@@ -179,27 +179,6 @@ const RPAUI = (() => {
     URL.revokeObjectURL(url);
   }
 
-  async function saveTemplateToBridge() {
-    const textarea = $("rpaTemplateText");
-    if (!textarea) return;
-    try {
-      const template = JSON.parse(textarea.value);
-      const project = document.getElementById("projectSelect")?.value || "default";
-      const resp = await sendToBg({
-        action: "rpa-save-template",
-        project,
-        template,
-      });
-      if (resp.error) {
-        addChatMsg(`RPA: Falha ao gravar — ${resp.error}`, "error");
-      } else {
-        addChatMsg("RPA: Template enviado para o Bridge.", "system");
-        closeTemplatePanel();
-      }
-    } catch (err) {
-      addChatMsg(`RPA: JSON inválido — ${err.message}`, "error");
-    }
-  }
 
 
   // ---------------------------------------------------------------------------
@@ -317,7 +296,6 @@ const RPAUI = (() => {
     $("rpaBackdrop")?.addEventListener("click", closeTemplatePanel);
     $("rpaCopyBtn")?.addEventListener("click", copyTemplate);
     $("rpaDownloadBtn")?.addEventListener("click", downloadTemplate);
-    $("rpaSaveBridgeBtn")?.addEventListener("click", saveTemplateToBridge);
     $("rpaCancelBtn")?.addEventListener("click", closeTemplatePanel);
     $("rpaSubmitBtn")?.addEventListener("click", submitTemplate);
 

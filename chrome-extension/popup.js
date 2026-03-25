@@ -993,6 +993,39 @@ function _tryParseActions(text) {
       }
     } catch (_) {}
   }
+  // Try to find an rpa_replay or any action object embedded in text
+  // Match JSON objects with "type": "rpa_replay" or with "body" + "dest"/"op"
+  const replayMatch = text.match(/\{[\s\S]*?"type"\s*:\s*"rpa_replay"[\s\S]*?\}(?=\s*[^,}\]]|$)/);
+  if (replayMatch) {
+    try {
+      // Find the balanced JSON object
+      const start = text.indexOf(replayMatch[0]);
+      const obj = _extractBalancedJson(text, start);
+      if (obj && obj.type === "rpa_replay") {
+        return { actions: [obj], alerts: [], answer: "" };
+      }
+    } catch (_) {}
+  }
+  // Try to find a payload object with dest/op/dados (raw POST body, wrap as rpa_replay)
+  const payloadMatch = text.match(/\{[\s\S]*?"dest"\s*:[\s\S]*?"op"\s*:\s*"gravar"[\s\S]*?\}/);
+  if (payloadMatch) {
+    try {
+      const start = text.indexOf(payloadMatch[0]);
+      const obj = _extractBalancedJson(text, start);
+      if (obj && obj.dest && obj.op === "gravar" && obj.dados) {
+        return { actions: [{ type: "rpa_replay", method: "POST", body: obj, description: `Replay ${obj.op} pgn=${obj.pgn || "?"}` }], alerts: [], answer: "" };
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+function _extractBalancedJson(text, start) {
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") { depth--; if (depth === 0) { try { return JSON.parse(text.slice(start, i + 1)); } catch (_) { return null; } } }
+  }
   return null;
 }
 
@@ -1034,11 +1067,89 @@ function _normalizeActionArray(arr) {
   }
 
   // Case: array of standard actions (type, selector, value...)
-  if (arr[0].type && (arr[0].selector || arr[0].id || arr[0].name)) {
+  if (arr[0].type && (arr[0].selector || arr[0].id || arr[0].name || arr[0].type === "rpa_replay")) {
     return { actions: arr, alerts: [], answer: "" };
   }
   return null;
 }
+
+// Re-Play Payload modal
+document.getElementById("replayPayloadBtn").addEventListener("click", () => {
+  $attachMenu.classList.remove("open");
+  $attachBtn.classList.remove("open");
+
+  const modal = document.createElement("div");
+  modal.className = "formdesc-modal";
+  modal.innerHTML = `
+    <div class="formdesc-modal-box" style="max-width:600px;">
+      <div class="formdesc-modal-header">Re-Play Payload</div>
+      <div class="formdesc-modal-body" style="flex:1 1 auto;padding:0 16px 8px;">
+        <textarea class="rp-textarea" placeholder='Cola aqui o JSON do payload...\n\nFormatos aceites:\n- Action: {"type":"rpa_replay","body":{...}}\n- Raw body: {"dest":"fme.pg","op":"gravar","dados":{...}}' style="width:100%;min-height:350px;font-family:monospace;font-size:11px;line-height:1.5;border:1px solid var(--border);border-radius:4px;padding:8px;background:var(--surface);color:var(--text);resize:vertical;box-sizing:border-box;"></textarea>
+      </div>
+      <div class="formdesc-modal-footer" style="display:flex;justify-content:space-between;">
+        <button class="rp-send" style="padding:4px 16px;background:#22c55e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">Send</button>
+        <button class="formdesc-modal-ok">Cancelar</button>
+      </div>
+    </div>`;
+
+  const textarea = modal.querySelector(".rp-textarea");
+  const sendBtn = modal.querySelector(".rp-send");
+
+  sendBtn.addEventListener("click", async () => {
+    const raw = textarea.value.trim();
+    if (!raw) return;
+
+    let action;
+    try {
+      const obj = JSON.parse(raw);
+      if (obj.type === "rpa_replay") {
+        action = obj;
+      } else if (obj.action && obj.action.type === "rpa_replay") {
+        action = obj.action;
+      } else if (obj.dest && obj.op && obj.dados) {
+        // Raw POST body — wrap as rpa_replay
+        action = { type: "rpa_replay", method: "POST", body: obj, description: `Replay ${obj.op} pgn=${obj.pgn || "?"}` };
+      } else if (obj.actions && obj.actions[0]) {
+        action = obj.actions[0];
+      } else {
+        addMsg("JSON não reconhecido. Use formato rpa_replay ou raw body com dest/op/dados.", "error");
+        return;
+      }
+    } catch (err) {
+      addMsg(`JSON inválido: ${err.message}`, "error");
+      return;
+    }
+
+    sendBtn.textContent = "A enviar...";
+    sendBtn.disabled = true;
+
+    try {
+      const resp = await sendToBg({
+        action: "execute-actions-on-page",
+        actions: [action],
+        confirmMode: false,
+      });
+      modal.remove();
+      if (resp.results) {
+        const done = resp.results.filter((r) => r.status === "done").length;
+        addActionCard("Re-Play Payload", resp.results, `${done}/${resp.results.length}`);
+      } else if (resp.error) {
+        addMsg(`Re-Play: ${resp.error}`, "error");
+      }
+    } catch (err) {
+      addMsg(`Re-Play: ${err.message}`, "error");
+    }
+  });
+
+  modal.querySelector(".formdesc-modal-ok").addEventListener("click", () => modal.remove());
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+  document.addEventListener("keydown", function onKey(e) {
+    if (e.key === "Escape") { e.preventDefault(); document.removeEventListener("keydown", onKey); modal.remove(); }
+  });
+
+  document.body.appendChild(modal);
+  textarea.focus();
+});
 
 // Auto-grow textarea
 function resetAskInput() {
@@ -1182,25 +1293,34 @@ function showJsonInspector(items, title) {
         <button class="ji-copy" title="Copiar" style="background:none;border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;color:var(--text-secondary);">Copy</button>
       </div>
       <div style="display:flex;gap:6px;padding:0 16px;align-items:center;">
-        <select class="ji-select" style="flex:1;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--surface);color:var(--text);"></select>
+        <select class="ji-select" style="flex:1;max-width:70%;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--surface);color:var(--text);overflow:hidden;text-overflow:ellipsis;"></select>
         <div class="ji-tabs" style="display:flex;gap:2px;">
           <button class="ji-tab ji-tab-active" data-tab="json" style="padding:2px 10px;border:1px solid var(--border);border-radius:4px 4px 0 0;font-size:11px;cursor:pointer;background:var(--surface-2);color:var(--text);">JSON</button>
           <button class="ji-tab" data-tab="tree" style="padding:2px 10px;border:1px solid var(--border);border-radius:4px 4px 0 0;font-size:11px;cursor:pointer;background:var(--surface);color:var(--text-secondary);">Tree</button>
+          <button class="ji-tab" data-tab="raw" style="padding:2px 10px;border:1px solid var(--border);border-radius:4px 4px 0 0;font-size:11px;cursor:pointer;background:var(--surface);color:var(--text-secondary);">RAW</button>
         </div>
       </div>
       <div class="formdesc-modal-body" style="flex:1 1 auto;padding:0 16px 8px;">
         <div class="ji-content-json" style="display:block;"><pre style="white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;margin:0;"></pre></div>
         <div class="ji-content-tree" style="display:none;font-size:11px;line-height:1.6;"></div>
+        <div class="ji-content-raw" style="display:none;"><textarea class="ji-raw-textarea" style="width:100%;min-height:300px;font-family:monospace;font-size:11px;line-height:1.5;border:1px solid var(--border);border-radius:4px;padding:8px;background:var(--surface);color:var(--text);resize:vertical;box-sizing:border-box;"></textarea></div>
       </div>
-      <div class="formdesc-modal-footer"><button class="formdesc-modal-ok">Fechar</button></div>
+      <div class="formdesc-modal-footer" style="display:flex;justify-content:space-between;align-items:center;">
+        <button class="ji-replay-btn" style="display:none;padding:4px 12px;background:#22c55e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;">RE-PLAY</button>
+        <button class="formdesc-modal-ok">Fechar</button>
+      </div>
     </div>`;
 
   const select = modal.querySelector(".ji-select");
   const jsonPre = modal.querySelector(".ji-content-json pre");
   const treeDiv = modal.querySelector(".ji-content-tree");
+  const rawTextarea = modal.querySelector(".ji-raw-textarea");
   const jsonPanel = modal.querySelector(".ji-content-json");
   const treePanel = modal.querySelector(".ji-content-tree");
+  const rawPanel = modal.querySelector(".ji-content-raw");
+  const replayBtn = modal.querySelector(".ji-replay-btn");
   let activeTab = "json";
+  let currentIdx = 0;
 
   // Populate selector
   items.forEach((item, i) => {
@@ -1213,34 +1333,71 @@ function showJsonInspector(items, title) {
   });
 
   function renderItem(idx) {
+    currentIdx = idx;
     const item = items[idx];
     const json = JSON.stringify(item, null, 2);
     jsonPre.textContent = json;
     treeDiv.innerHTML = "";
     treeDiv.appendChild(_buildTree(item));
+    rawTextarea.value = json;
+    updateReplayBtn();
+  }
+
+  function updateReplayBtn() {
+    const item = items[currentIdx];
+    const isReplayable = item.action?.type === "rpa_replay";
+    replayBtn.style.display = (activeTab === "raw" && isReplayable) ? "block" : "none";
   }
 
   function setTab(tab) {
     activeTab = tab;
     jsonPanel.style.display = tab === "json" ? "block" : "none";
     treePanel.style.display = tab === "tree" ? "block" : "none";
+    rawPanel.style.display = tab === "raw" ? "block" : "none";
     modal.querySelectorAll(".ji-tab").forEach((t) => {
       const isActive = t.dataset.tab === tab;
       t.classList.toggle("ji-tab-active", isActive);
       t.style.background = isActive ? "var(--surface-2)" : "var(--surface)";
       t.style.color = isActive ? "var(--text)" : "var(--text-secondary)";
     });
+    updateReplayBtn();
   }
 
   select.addEventListener("change", () => renderItem(parseInt(select.value)));
   modal.querySelectorAll(".ji-tab").forEach((t) => t.addEventListener("click", () => setTab(t.dataset.tab)));
 
   modal.querySelector(".ji-copy").addEventListener("click", () => {
-    const text = activeTab === "json" ? jsonPre.textContent : treeDiv.innerText;
+    const text = activeTab === "json" ? jsonPre.textContent : activeTab === "raw" ? rawTextarea.value : treeDiv.innerText;
     navigator.clipboard.writeText(text).then(() => {
       modal.querySelector(".ji-copy").textContent = "Copied!";
       setTimeout(() => { modal.querySelector(".ji-copy").textContent = "Copy"; }, 1500);
     });
+  });
+
+  // RE-PLAY: re-send the edited action
+  replayBtn.addEventListener("click", async () => {
+    try {
+      const edited = JSON.parse(rawTextarea.value);
+      const action = edited.action || edited;
+      if (!action.type) { addMsg("JSON inválido: falta 'type' na action", "error"); return; }
+      replayBtn.textContent = "A enviar...";
+      replayBtn.disabled = true;
+      const resp = await sendToBg({
+        action: "execute-actions-on-page",
+        actions: [action],
+        confirmMode: false,
+      });
+      modal.remove();
+      if (resp.results) {
+        const done = resp.results.filter((r) => r.status === "done").length;
+        addMsg(`RE-PLAY: ${done}/${resp.results.length} — ${done ? "sucesso" : "falhou"}`, done ? "system" : "error");
+        if (resp.results.length) {
+          console.log("[RE-PLAY] results:", JSON.stringify(resp.results, null, 2));
+        }
+      }
+    } catch (err) {
+      addMsg(`RE-PLAY: JSON inválido — ${err.message}`, "error");
+    }
   });
 
   modal.querySelector(".formdesc-modal-ok").addEventListener("click", () => modal.remove());

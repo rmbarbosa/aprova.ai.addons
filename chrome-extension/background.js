@@ -245,12 +245,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "rpa-record-status":
           sendResponse({ recording: RPA.isRecording(), captures: RPA.getCaptures() });
           break;
-        case "rpa-save-template":
-          sendResponse(await bridgeRequest("/template/save", "POST", {
-            project: msg.project,
-            template: msg.template,
-          }));
-          break;
         default:
           sendResponse({ error: `Unknown action: ${msg.action}` });
       }

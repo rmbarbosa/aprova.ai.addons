@@ -563,42 +563,73 @@ function showConfirmOverlay(action, currentValue = null, totalActions = 1) {
 }
 
 // ---------------------------------------------------------------------------
-// Sanitize numeric/currency fields in RPA replay body
-// Ensures format: "xxxx.xx" — no thousands separators, no currency symbols
+// Extract context fields from the page's own gravar() function
+// Parses the JS source to find the body construction pattern and evaluates variables
 // ---------------------------------------------------------------------------
+function _extractContextFromGravar() {
+  const ctx = {};
+  try {
+    const fn = window.gravar;
+    if (typeof fn !== "function") return ctx;
+    const src = fn.toString();
+    // Find: { dest: "...", key: varName, ... op: "gravar", dados: ... }
+    const match = src.match(/\{\s*dest\s*:\s*["'][^"']+["']\s*,([^}]+)op\s*:\s*["']gravar["']/);
+    if (!match) return ctx;
+    // Extract key: value pairs (e.g., cand_id: cand_id, atividade: c_atividade)
+    const pairs = match[1].matchAll(/(\w+)\s*:\s*(\w+)/g);
+    for (const [, key, varName] of pairs) {
+      if (key === "dados") continue;
+      const val = window[varName];
+      if (val !== undefined && val !== null) {
+        ctx[key] = String(val);
+      }
+    }
+  } catch (e) {
+    console.warn("[RPA replay] Failed to parse gravar():", e.message);
+  }
+  return ctx;
+}
+
+// ---------------------------------------------------------------------------
+// Sanitize numeric/currency fields in RPA replay body
+// Only normalizes monetary/financial/percentage fields — leaves integers alone
+// ---------------------------------------------------------------------------
+const _CURRENCY_FIELDS = /elegivel|custo|valor|total|montante|preco|price|taxa|perc|distancia|tt_/i;
+const _INTEGER_FIELDS = /^(n|mes|ano|dia|pgn|atividade|benef|estab|n_pessoas|indicador_n)$/i;
+
 function _sanitizeNumericFields(obj, depth = 0) {
   if (depth > 15 || !obj || typeof obj !== "object") return;
   const entries = Array.isArray(obj) ? obj.map((v, i) => [i, v]) : Object.entries(obj);
   for (const [key, val] of entries) {
     if (typeof val === "string") {
-      // Detect values that look like numbers/currency but have bad formatting
-      // Match: "€3000", "3.000,00", "15,000.00", "3000,50", "3 000.00", etc.
-      const cleaned = val.replace(/[€$£\s]/g, "").trim();
-      if (!cleaned) continue;
-      // Pattern: digits with possible separators and decimal
-      if (/^-?[\d.,]+$/.test(cleaned) && /\d/.test(cleaned)) {
-        // Determine if comma is decimal separator (European) or thousands
-        const lastComma = cleaned.lastIndexOf(",");
-        const lastDot = cleaned.lastIndexOf(".");
-        let normalized;
-        if (lastComma > lastDot && lastComma === cleaned.length - 3) {
-          // European format: "3.000,50" → comma is decimal
-          normalized = cleaned.replace(/\./g, "").replace(",", ".");
-        } else if (lastDot > lastComma && lastDot === cleaned.length - 3) {
-          // US/standard format: "3,000.50" → dot is decimal
-          normalized = cleaned.replace(/,/g, "");
-        } else if (lastComma > -1 && lastDot === -1 && lastComma === cleaned.length - 3) {
-          // "3000,50" → comma is decimal
-          normalized = cleaned.replace(",", ".");
-        } else {
-          // No decimal part or already clean → remove non-digit separators
-          normalized = cleaned.replace(/,/g, "");
-        }
-        // Only apply if result is a valid number
-        const num = parseFloat(normalized);
-        if (!isNaN(num) && isFinite(num)) {
-          obj[key] = num.toFixed(2);
-        }
+      const fieldName = typeof key === "string" ? key : "";
+      // Skip fields that are clearly integers (months, years, IDs, counts)
+      if (_INTEGER_FIELDS.test(fieldName)) continue;
+      // Skip fields ending in _d (display text), _id, or short codes
+      if (fieldName.endsWith("_d") || fieldName.endsWith("_id")) continue;
+      // Only process fields that look like currency/financial
+      if (!_CURRENCY_FIELDS.test(fieldName)) continue;
+
+      // Detect values with bad formatting: "€3000", "3.000,00", "15,000.00", etc.
+      const cleaned = val.replace(/[€$£%\s]/g, "").trim();
+      if (!cleaned || !/^-?[\d.,]+$/.test(cleaned)) continue;
+
+      const lastComma = cleaned.lastIndexOf(",");
+      const lastDot = cleaned.lastIndexOf(".");
+      let normalized;
+      if (lastComma > lastDot && lastComma === cleaned.length - 3) {
+        normalized = cleaned.replace(/\./g, "").replace(",", ".");
+      } else if (lastDot > lastComma && lastDot === cleaned.length - 3) {
+        normalized = cleaned.replace(/,/g, "");
+      } else if (lastComma > -1 && lastDot === -1 && lastComma === cleaned.length - 3) {
+        normalized = cleaned.replace(",", ".");
+      } else {
+        normalized = cleaned.replace(/,/g, "");
+      }
+
+      const num = parseFloat(normalized);
+      if (!isNaN(num) && isFinite(num)) {
+        obj[key] = num.toFixed(2);
       }
     } else if (typeof val === "object" && val !== null) {
       _sanitizeNumericFields(val, depth + 1);
@@ -692,13 +723,32 @@ async function executeAction(action, confirmMode, totalActions = 1) {
       postUrl = base.includes("-srv.php") ? base + "?R" : window.location.href;
     }
     try {
-      // Safety net: inject hidden input values from the page into body if missing
+      // Safety net: inject missing context fields into body
       const bodyObj = typeof action.body === "string" ? JSON.parse(action.body) : { ...action.body };
-      const hiddens = document.querySelectorAll('input[type="hidden"]');
-      for (const h of hiddens) {
-        if (h.name && h.value && !(h.name in bodyObj)) {
-          bodyObj[h.name] = h.value;
-          console.log(`[RPA replay] injected hidden field: ${h.name}=${h.value}`);
+      const isCompete = window.location.hostname.includes("compete2020.gov.pt");
+      if (isCompete && typeof window.gravar === "function") {
+        // Compete2020: parse the gravar() function source to extract context variable mappings
+        // ALWAYS override — the page's gravar() has the authoritative values (e.g. atividade=36),
+        // Claude may have the wrong value (e.g. atividade=2, the sequential action number)
+        const pageCtx = _extractContextFromGravar();
+        for (const [k, v] of Object.entries(pageCtx)) {
+          if (!v || k === "dados") continue;
+          if (bodyObj[k] !== v) {
+            console.log(`[RPA replay] override from gravar(): ${k}=${v} (was: ${bodyObj[k] ?? "missing"})`);
+          }
+          bodyObj[k] = v;
+        }
+      } else {
+        // Generic fallback: scan all form elements (hidden inputs, selects, visible inputs)
+        const formEls = document.querySelectorAll('input[type="hidden"], select, input[type="text"]');
+        for (const el of formEls) {
+          const fieldName = el.name || el.id;
+          if (!fieldName || !el.value) continue;
+          if (el.closest("tr, tbody")) continue;
+          if (fieldName in bodyObj) continue;
+          if (fieldName.startsWith("topo_") || fieldName.endsWith("_d")) continue;
+          bodyObj[fieldName] = el.value;
+          console.log(`[RPA replay] injected page field: ${fieldName}=${el.value}`);
         }
       }
       // Sanitize numeric/currency values: ensure "xxxx.xx" format (no thousands sep, no currency symbols)
